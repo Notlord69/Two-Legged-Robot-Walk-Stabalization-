@@ -1,0 +1,108 @@
+<robot name="simple_biped">
+  <!-- Torso -->
+  <link name="torso">
+    <inertial>
+      <mass value="5.0"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.1" iyy="0.1" izz="0.1"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <box size="0.3 0.2 0.5"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.3 0.2 0.5"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Left leg -->
+  <link name="left_thigh">
+    <visual>
+      <geometry>
+        <cylinder length="0.3" radius="0.05"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder length="0.3" radius="0.05"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="left_shin">
+    <visual>
+      <geometry>
+        <cylinder length="0.3" radius="0.04"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder length="0.3" radius="0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joints -->
+  <joint name="left_hip" type="revolute">
+    <parent link="torso"/>
+    <child link="left_thigh"/>
+    <origin xyz="0.1 0 -0.25" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-1.0" upper="1.0" effort="10" velocity="1"/>
+  </joint>
+
+  <joint name="left_knee" type="revolute">
+    <parent link="left_thigh"/>
+    <child link="left_shin"/>
+    <origin xyz="0 0 -0.3" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0" upper="1.5" effort="10" velocity="1"/>
+  </joint>
+
+  <!-- Right leg (mirror of left leg) -->
+  <link name="right_thigh">
+    <visual>
+      <geometry>
+        <cylinder length="0.3" radius="0.05"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder length="0.3" radius="0.05"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="right_shin">
+    <visual>
+      <geometry>
+        <cylinder length="0.3" radius="0.04"/>
+      </geometry>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder length="0.3" radius="0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="right_hip" type="revolute">
+    <parent link="torso"/>
+    <child link="right_thigh"/>
+    <origin xyz="-0.1 0 -0.25" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-1.0" upper="1.0" effort="10" velocity="1"/>
+  </joint>
+
+  <joint name="right_knee" type="revolute">
+    <parent link="right_thigh"/>
+    <child link="right_shin"/>
+    <origin xyz="0 0 -0.3" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0" upper="1.5" effort="10" velocity="1"/>
+  </joint>
+</robot>

@@ -1,0 +1,14 @@
+<launch>
+  <!-- Launch Gazebo -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="true"/>
+  </include>
+
+  <!-- Spawn robot -->
+  <param name="robot_description" command="$(find xacro)/xacro $(find two_legged_robot)/urdf/biped.urdf" />
+
+  <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model" output="screen"
+        args="-param robot_description -urdf -model simple_biped -x 0 -y 0 -z 0.5"/>
+</launch>
