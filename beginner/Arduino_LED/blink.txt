@@ -1,0 +1,12 @@
+void setup() {
+  pinMode(13, OUTPUT); // Set built-in LED as output
+}
+
+int numer=500;
+
+void loop() {
+  digitalWrite(13, HIGH); // LED on
+  delay(numer);            // wait 1 second
+  digitalWrite(13, LOW);  // LED off
+  delay(numer); 
+}
