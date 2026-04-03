@@ -78,3 +78,65 @@ class SessionLogger:
         if self._csv is None:
             return
         self._csv.write(','.join(f'{v:.6g}' for v in row) + '\n')
+
+    def write_summary(self, stats: dict) -> None:
+        """
+        Write summary.txt from the stats dict, then close all file handles.
+        try/finally guarantees handles are closed even if an exception occurs.
+
+        PASS criteria: mean_dt < 10.5 ms AND jitter_ms < 1.0 ms.
+        """
+        session_name = os.path.basename(self._session_path)
+        n      = stats.get('analyzed_cycles', 0)
+        total  = stats.get('total_cycles', 0)
+        warmup = stats.get('warmup_cycles', WARMUP_CYCLES)
+        coded  = stats.get('coded_errors', 0)
+
+        summary_file = None
+        try:
+            summary_path = os.path.join(self._session_path, "summary.txt")
+            summary_file = open(summary_path, 'w')
+
+            lines = [
+                f"Session: {session_name}",
+                f"Total cycles   : {total}",
+                f"Analyzed cycles: {n}  (warmup excluded: {warmup})",
+                "",
+                "[TIMING]",
+            ]
+
+            if n > 0:
+                mean_ms  = stats['mean_dt']        * 1000.0
+                std_ms   = stats['std_dt']         * 1000.0
+                min_ms   = stats['min_dt']         * 1000.0
+                max_ms   = stats['max_dt']         * 1000.0
+                jitter   = stats['jitter_ms']
+                viol     = stats['violations']
+                viol_pct = stats['violation_rate'] * 100.0
+                status   = "PASS" if mean_ms < 10.5 and jitter < 1.0 else "FAIL"
+                lines += [
+                    f"  Mean compute : {mean_ms:.3f} ms",
+                    f"  Std dev      : {std_ms:.3f} ms",
+                    f"  Min          : {min_ms:.3f} ms",
+                    f"  Max          : {max_ms:.3f} ms",
+                    f"  Jitter       : {jitter:.3f} ms",
+                    f"  Violations   : {viol}  ({viol_pct:.1f}%)",
+                    f"  Status       : {status}",
+                ]
+            else:
+                lines.append("  No analyzed cycles (run ended before warmup completed)")
+
+            lines += [
+                "",
+                "[ERRORS]",
+                f"  Coded errors in ring: {coded}",
+            ]
+            summary_file.write('\n'.join(lines) + '\n')
+
+        finally:
+            if self._csv is not None:
+                self._csv.flush()
+                self._csv.close()
+                self._csv = None
+            if summary_file is not None:
+                summary_file.close()

@@ -40,3 +40,49 @@ def test_session_logger_append_row_writes_data(tmp_path):
 def test_session_logger_session_path_is_string(tmp_path):
     logger = SessionLogger(str(tmp_path))
     assert isinstance(logger.session_path, str)
+
+
+def test_write_summary_pass(tmp_path):
+    logger = SessionLogger(str(tmp_path))
+    stats = {
+        'mean_dt': 0.005, 'std_dt': 0.0003, 'min_dt': 0.003, 'max_dt': 0.009,
+        'jitter_ms': 0.3, 'violations': 0, 'violation_rate': 0.0,
+        'total_cycles': 1000, 'analyzed_cycles': 950,
+        'warmup_cycles': 50, 'coded_errors': 0,
+    }
+    logger.write_summary(stats)
+    content = open(os.path.join(logger.session_path, "summary.txt")).read()
+    assert 'PASS' in content
+    assert 'Total cycles   : 1000' in content
+    assert 'Analyzed cycles: 950' in content
+    assert logger._csv is None  # closed by write_summary
+
+
+def test_write_summary_fail(tmp_path):
+    logger = SessionLogger(str(tmp_path))
+    stats = {
+        'mean_dt': 0.012, 'std_dt': 0.002, 'min_dt': 0.008, 'max_dt': 0.020,
+        'jitter_ms': 2.0, 'violations': 10, 'violation_rate': 0.011,
+        'total_cycles': 950, 'analyzed_cycles': 900,
+        'warmup_cycles': 50, 'coded_errors': 2,
+    }
+    logger.write_summary(stats)
+    content = open(os.path.join(logger.session_path, "summary.txt")).read()
+    assert 'FAIL' in content
+    assert 'Violations   : 10' in content
+    assert 'Coded errors in ring: 2' in content
+
+
+def test_write_summary_zero_analyzed_cycles(tmp_path):
+    logger = SessionLogger(str(tmp_path))
+    stats = {
+        'mean_dt': 0.0, 'std_dt': 0.0, 'min_dt': 0.0, 'max_dt': 0.0,
+        'jitter_ms': 0.0, 'violations': 0, 'violation_rate': 0.0,
+        'total_cycles': 30, 'analyzed_cycles': 0,
+        'warmup_cycles': 50, 'coded_errors': 0,
+    }
+    logger.write_summary(stats)
+    content = open(os.path.join(logger.session_path, "summary.txt")).read()
+    assert 'No analyzed cycles' in content
+    assert 'Total cycles   : 30' in content
+    assert logger._csv is None
