@@ -20,7 +20,7 @@ import os
 import datetime
 import threading
 import numpy as np
-from typing import Optional
+from typing import IO, Optional
 
 from shared_state import Siclo1State, ERR_TIMING_VIOLATION
 
@@ -31,6 +31,7 @@ from shared_state import Siclo1State, ERR_TIMING_VIOLATION
 
 WARMUP_CYCLES: int = 50  # cycles — excluded from performance statistics
 
+# 16-column header matching TelemetryRingBuffer.COLS layout in shared_state.py
 CSV_HEADER: str = (
     "timestamp_s,cycle,error_code,com_x,com_y,com_z,"
     "left_contact,right_contact,stability_status,"
@@ -58,7 +59,7 @@ class SessionLogger:
     def __init__(self, base_dir: str) -> None:
         session_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self._session_path: str = os.path.join(base_dir, "sessions", session_name)
-        self._csv: Optional[object] = None
+        self._csv: Optional[IO[str]] = None
 
         try:
             os.makedirs(self._session_path, exist_ok=True)
