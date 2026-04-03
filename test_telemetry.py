@@ -127,3 +127,4 @@ def test_session_logger_write_summary_noop_when_folder_missing(monkeypatch, tmp_
         'warmup_cycles': 50, 'coded_errors': 0,
     })
     # reaching here without raising is the assertion
+    assert logger._csv is None  # handle must remain None in degraded mode
