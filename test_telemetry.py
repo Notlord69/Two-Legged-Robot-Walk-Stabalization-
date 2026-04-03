@@ -86,3 +86,44 @@ def test_write_summary_zero_analyzed_cycles(tmp_path):
     assert 'No analyzed cycles' in content
     assert 'Total cycles   : 30' in content
     assert logger._csv is None
+
+
+def test_session_logger_oserror_sets_csv_none(monkeypatch, tmp_path):
+    import telemetry as _tel
+
+    def _raise(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(_tel.os, 'makedirs', _raise)
+    logger = SessionLogger(str(tmp_path))
+    assert logger._csv is None
+
+
+def test_session_logger_append_row_noop_when_csv_none(monkeypatch, tmp_path):
+    import telemetry as _tel
+
+    def _raise(*a, **k):
+        raise OSError()
+
+    monkeypatch.setattr(_tel.os, 'makedirs', _raise)
+    logger = SessionLogger(str(tmp_path))
+    row = np.zeros(16, dtype=np.float64)
+    logger.append_row(row)  # must not raise
+
+
+def test_session_logger_write_summary_noop_when_folder_missing(monkeypatch, tmp_path):
+    import telemetry as _tel
+
+    def _raise(*a, **k):
+        raise OSError()
+
+    monkeypatch.setattr(_tel.os, 'makedirs', _raise)
+    logger = SessionLogger(str(tmp_path))
+    # write_summary must return silently, not raise FileNotFoundError
+    logger.write_summary({
+        'mean_dt': 0.0, 'std_dt': 0.0, 'min_dt': 0.0, 'max_dt': 0.0,
+        'jitter_ms': 0.0, 'violations': 0, 'violation_rate': 0.0,
+        'total_cycles': 0, 'analyzed_cycles': 0,
+        'warmup_cycles': 50, 'coded_errors': 0,
+    })
+    # reaching here without raising is the assertion
