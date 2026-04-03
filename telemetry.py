@@ -85,7 +85,11 @@ class SessionLogger:
         try/finally guarantees handles are closed even if an exception occurs.
 
         PASS criteria: mean_dt < 10.5 ms AND jitter_ms < 1.0 ms.
+        The 0.5 ms headroom accounts for measurement overhead; per-cycle
+        violations are counted separately in 'violations'.
         """
+        if not os.path.isdir(self._session_path):
+            return  # degraded mode — session folder never created (OSError at init)
         session_name = os.path.basename(self._session_path)
         n      = stats.get('analyzed_cycles', 0)
         total  = stats.get('total_cycles', 0)
