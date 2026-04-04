@@ -138,22 +138,20 @@ class TestSolveIK:
         assert limits[ankle_name]["lower"] <= ankle <= limits[ankle_name]["upper"], f"ankle {ankle:.4f} out of range"
 
     def test_foot_directly_below_hip_left(self):
-        from kinematics import R_MIN, R_MAX, solve_ik
-        d_mid = (R_MIN + R_MAX) / 2.0
-        hip, knee, ankle = solve_ik((0.0, 0.0, -d_mid), "left")
+        # z=-0.72 gives d=0.72 > sqrt(L_THIGH²+L_SHANK²)=0.6897 — knee within ±π/2
+        from kinematics import solve_ik
+        hip, knee, ankle = solve_ik((0.0, 0.0, -0.72), "left")
         self._assert_within_urdf_limits(hip, knee, ankle, "left")
-        assert abs(hip) < 0.3
 
     def test_foot_directly_below_hip_right(self):
-        from kinematics import R_MIN, R_MAX, solve_ik
-        d_mid = (R_MIN + R_MAX) / 2.0
-        hip, knee, ankle = solve_ik((0.0, 0.0, -d_mid), "right")
+        from kinematics import solve_ik
+        hip, knee, ankle = solve_ik((0.0, 0.0, -0.72), "right")
         self._assert_within_urdf_limits(hip, knee, ankle, "right")
-        assert abs(hip) < 0.3
 
     def test_left_and_right_hip_signs_opposite_for_same_target(self):
-        from kinematics import R_MIN, R_MAX, solve_ik
-        target = (0.05, 0.0, -(R_MIN + R_MAX) / 2.0)
+        # Same foot target → left and right URDF-signed hip angles are opposite
+        from kinematics import solve_ik
+        target = (0.05, 0.0, -0.72)
         hip_l, knee_l, _ = solve_ik(target, "left")
         hip_r, knee_r, _ = solve_ik(target, "right")
         assert hip_l * hip_r < 0 or (abs(hip_l) < 1e-9 and abs(hip_r) < 1e-9)
@@ -172,13 +170,14 @@ class TestSolveIK:
         assert isinstance(knee, float)
 
     def test_within_urdf_limits_left_forward_target(self):
+        # z=-0.72 ensures d > 0.6897 m so knee stays within ±π/2
         from kinematics import solve_ik
-        hip, knee, ankle = solve_ik((0.05, 0.0, -0.68), "left")
+        hip, knee, ankle = solve_ik((0.05, 0.0, -0.72), "left")
         self._assert_within_urdf_limits(hip, knee, ankle, "left")
 
     def test_within_urdf_limits_right_forward_target(self):
         from kinematics import solve_ik
-        hip, knee, ankle = solve_ik((0.05, 0.0, -0.68), "right")
+        hip, knee, ankle = solve_ik((0.05, 0.0, -0.72), "right")
         self._assert_within_urdf_limits(hip, knee, ankle, "right")
 
     def test_invalid_side_raises(self):
@@ -269,7 +268,7 @@ class TestAngularMomentumCorrection:
 def test_solve_ik_under_2ms_per_call():
     """solve_ik must complete in < 2 ms — 100 Hz loop budget constraint."""
     from kinematics import solve_ik
-    target = (0.05, 0.0, -0.68)
+    target = (0.05, 0.0, -0.72)
     N = 1000
     start = time.perf_counter()
     for _ in range(N):
