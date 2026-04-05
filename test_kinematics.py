@@ -276,3 +276,19 @@ def test_solve_ik_under_2ms_per_call():
     elapsed_s = time.perf_counter() - start
     avg_ms = (elapsed_s / N) * 1000.0
     assert avg_ms < 2.0, f"solve_ik averaged {avg_ms:.3f} ms — exceeds 2 ms budget"
+
+
+# ── shared_state.py — foot target fields ─────────────────────────────────────
+
+def test_siclo1state_has_left_foot_target():
+    from shared_state import Siclo1State
+    s = Siclo1State()
+    assert hasattr(s, 'left_foot_target')
+    assert s.left_foot_target == (0.0, 0.0, 0.0)
+
+
+def test_siclo1state_has_right_foot_target():
+    from shared_state import Siclo1State
+    s = Siclo1State()
+    assert hasattr(s, 'right_foot_target')
+    assert s.right_foot_target == (0.0, 0.0, 0.0)

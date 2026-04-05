@@ -258,6 +258,12 @@ class Siclo1State:
         # Feedforward torso pitch correction from angular momentum (rad).
         self.torso_pitch_correction: float = 0.0  # rad, applied to torso pitch joint
 
+        # Per-leg foot targets (m, world frame).
+        # Written by gait planner; read by DebugVisualizer.
+        # Default (0,0,0) = no active target; visualiser skips red line.
+        self.left_foot_target:  tuple = (0.0, 0.0, 0.0)
+        self.right_foot_target: tuple = (0.0, 0.0, 0.0)
+
         # ====================================================================
         # SYSTEM HEALTH
         # ====================================================================
