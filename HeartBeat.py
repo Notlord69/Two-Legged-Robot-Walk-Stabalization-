@@ -60,9 +60,6 @@ TARGET_FREQ:   float = 100.0          # Hz
 TARGET_DT:     float = 1.0 / TARGET_FREQ   # 0.01 s
 OVERRUN_LIMIT: float = TARGET_DT      # 10 ms hard ceiling
 
-# Visualisation decimation: update GUI every N physics cycles (10 Hz viz)
-VIZ_DECIMATION: int = 10
-
 # Maximum log buffer size (printed at end of run, not during)
 LOG_BUFFER_SIZE: int = 2000
 
@@ -379,17 +376,20 @@ class PyBulletInterface:
 class Siclo1Controller:
     """100 Hz headless controller with optional decimated GUI."""
 
-    def __init__(self, use_gui: bool = False):
+    def __init__(self, use_gui: bool = False, viz_decimation: int = 10):
         self.use_gui = use_gui
+        self.viz_decimation: int = viz_decimation  # cycles between GUI renders
+        self._visualizer = None                    # set after warmup if GUI mode
 
         # 1. Physics client — ALWAYS headless
         self.physics_client = p.connect(p.DIRECT)
 
-        # 2. Optional GUI viewer via shared memory
+        # 2. Optional GUI viewer
         self.gui_client: Optional[int] = None
         if use_gui:
             try:
                 self.gui_client = p.connect(p.GUI)
+                time.sleep(2.0)  # X-server buffer — wait for window to appear (WSL)
             except Exception:
                 self.gui_client = None
 
@@ -414,6 +414,11 @@ class Siclo1Controller:
             sys.exit(1)
 
         self.pybullet.load_robot(urdf_path=urdf_file)
+
+        # Hip-pitch child link names (child of Left_Hip_Forwards / Right_Hip_Fowards).
+        # Used by DebugVisualizer to read world-space hip positions.
+        self._left_hip_link  = "Left_Upper_Leg_1"   # URDF-verified 2026-04-05
+        self._right_hip_link = "Right_Upper_Leg_1"  # URDF-verified 2026-04-05
 
         # 7. If GUI, mirror the scene
         if self.gui_client is not None:
@@ -453,6 +458,35 @@ class Siclo1Controller:
         self._telemetry_thread.log(f"  Robot ID     : {self.pybullet.robot_id}")
         self._telemetry_thread.log(f"  Bodies       : {p.getNumBodies(physicsClientId=self.physics_client)}")
         self._telemetry_thread.log(f"  GUI viewer   : {'ON' if self.gui_client is not None else 'OFF'}")
+
+        # Warmup: settle physics before real-time loop.
+        # GUI mode gets fewer cycles (window already visible); Direct gets more.
+        warmup_cycles = 5 if self.use_gui else 50
+        self._warmup(warmup_cycles)
+        self._telemetry_thread.log(f"  Warmup cycles: {warmup_cycles}")
+
+        # Debug visualiser — GUI mode only
+        if self.gui_client is not None:
+            from viz.debug_markers import DebugVisualizer
+            self._visualizer = DebugVisualizer(self.gui_client)
+
+    # ------------------------------------------------------------------ #
+    def _warmup(self, cycles: int) -> None:
+        """Run full control pipeline for N cycles without real-time timing.
+
+        Lets the robot settle under gravity before the 100 Hz loop starts.
+        Gait commands are not issued (no gait planner integrated yet).
+        The 10 ms timing guard does NOT apply here.
+        """
+        for _ in range(cycles):
+            self.pybullet.read_sensors()
+            self.pybullet.update_link_positions()
+            perception.update_perception()
+            stability.update_stability(dt=TARGET_DT)
+            active_balance.update_active_balance()
+            recovery.update_recovery()
+            self.pybullet.apply_control()
+            p.stepSimulation(physicsClientId=self.physics_client)
 
     # ------------------------------------------------------------------ #
     def step(self) -> bool:
@@ -538,9 +572,9 @@ class Siclo1Controller:
             row[2] = ERR_TIMING_VIOLATION
         shared_state.telemetry.write(row)
 
-        # 15. Optional GUI sync (decimated — every VIZ_DECIMATION cycles)
+        # 15. Optional GUI sync (decimated — every viz_decimation cycles)
         if (self.gui_client is not None and
-                shared_state.cycle_count % VIZ_DECIMATION == 0):
+                shared_state.cycle_count % self.viz_decimation == 0):
             self._sync_gui()
 
         return True
@@ -564,6 +598,12 @@ class Siclo1Controller:
                 js = p.getJointState(rid_phys, jid, physicsClientId=pc_phys)
                 p.resetJointState(1, jid, js[0], js[1],
                                   physicsClientId=pc_gui)
+            # Update debug visualisation (annulus arcs + hip→foot vectors)
+            if self._visualizer is not None:
+                lp = self.shared_state.link_positions
+                left_hip  = tuple(lp.get(self._left_hip_link,  [0.0, 0.0, 0.0]))
+                right_hip = tuple(lp.get(self._right_hip_link, [0.0, 0.0, 0.0]))
+                self._visualizer.update(self.shared_state, left_hip, right_hip)
         except Exception:
             pass  # GUI sync is non-critical
 
