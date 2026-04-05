@@ -96,3 +96,36 @@ def set_joint_position_target(body_id: int, joint_index: int,
         velocityGain=kd,
         force=max_torque,
     )
+
+
+def add_debug_line(from_xyz, to_xyz, color_rgb,
+                   width: float = 1.0,
+                   replace_id: int = -1,
+                   physics_client: int = 0) -> int:
+    """Add or replace a PyBullet debug line. Returns item ID.
+
+    from_xyz:      (x, y, z) start point (m, world frame)
+    to_xyz:        (x, y, z) end point (m, world frame)
+    color_rgb:     [r, g, b] each in [0, 1]
+    width:         line width in pixels
+    replace_id:    item ID to update in-place; pass -1 to create a new line
+    physics_client: PyBullet client ID (must be a GUI client to be visible)
+
+    All p.* calls are confined to this file (CLAUDE.md).
+    """
+    import pybullet as p                       # deferred: not needed for URDF-only callers
+    kwargs = dict(lineColorRGB=color_rgb, lineWidth=width,
+                  physicsClientId=physics_client)
+    if replace_id >= 0:
+        kwargs['replaceItemUniqueId'] = replace_id
+    return p.addUserDebugLine(list(from_xyz), list(to_xyz), **kwargs)
+
+
+def remove_debug_line(item_id: int, physics_client: int = 0) -> None:
+    """Remove a PyBullet debug line by item ID. No-op if item_id < 0.
+
+    All p.* calls are confined to this file (CLAUDE.md).
+    """
+    import pybullet as p                       # deferred: not needed for URDF-only callers
+    if item_id >= 0:
+        p.removeUserDebugItem(item_id, physicsClientId=physics_client)
