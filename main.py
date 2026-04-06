@@ -36,10 +36,11 @@ def main(argv=None) -> None:
     decimation = _viz_decimation(args.viz_hz)
     controller = Siclo1Controller(use_gui=args.gui, viz_decimation=decimation)
     try:
-        controller.run(duration=30.0)
+        controller.run(max_cycles=1000)
     except KeyboardInterrupt:
         print("\n[Siclo1] Interrupted.")
     finally:
+        controller.finalize_telemetry()
         controller.shutdown()
 
 

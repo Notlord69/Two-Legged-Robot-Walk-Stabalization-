@@ -613,14 +613,12 @@ class Siclo1Controller:
             pass  # GUI sync is non-critical
 
     # ------------------------------------------------------------------ #
-    def run(self, duration: float = 10.0, print_interval: float = 1.0):
+    def run(self, max_cycles: int = 1000, print_interval: float = 1.0):
         print(f"\n{'='*70}")
-        print(f"STARTING SIMULATION \u2014 {duration}s @ {TARGET_FREQ} Hz  (OPTIMISED)")
+        print(f"STARTING SIMULATION \u2014 {max_cycles} cycles @ {TARGET_FREQ} Hz  (OPTIMISED)")
         print(f"{'='*70}\n")
 
-        total_cycles = int(duration / TARGET_DT)
-
-        for i in range(total_cycles):
+        for i in range(max_cycles):
             success = self.step()
             if not success:
                 self._telemetry_thread.log(
@@ -628,6 +626,16 @@ class Siclo1Controller:
                 break
 
         self._print_final_summary()
+
+    # ------------------------------------------------------------------ #
+    def finalize_telemetry(self) -> None:
+        """Stop telemetry thread and flush/close the CSV.
+
+        Call BEFORE any hold loop and BEFORE shutdown().
+        shutdown() checks is_alive() so calling both is safe.
+        """
+        self._telemetry_thread.stop()
+        self._telemetry_thread.join(timeout=2.0)
 
     # ------------------------------------------------------------------ #
     def _print_final_summary(self) -> None:
@@ -675,9 +683,13 @@ class Siclo1Controller:
 
     # ------------------------------------------------------------------ #
     def shutdown(self) -> None:
-        self._telemetry_thread.stop()
-        self._telemetry_thread.join(timeout=2.0)
-        p.disconnect(physicsClientId=self.physics_client)
+        if self._telemetry_thread.is_alive():
+            self._telemetry_thread.stop()
+            self._telemetry_thread.join(timeout=2.0)
+        try:
+            p.disconnect(physicsClientId=self.physics_client)
+        except Exception:
+            pass
         if self.gui_client is not None:
             try:
                 p.disconnect(physicsClientId=self.gui_client)
