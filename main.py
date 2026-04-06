@@ -2,11 +2,14 @@
 Siclo1 bipedal robot simulation — CLI entry point.
 
 Usage:
-    python3 main.py                    # headless, 10 Hz GUI render rate (default)
-    python3 main.py --gui              # enable PyBullet GUI at 10 Hz
-    python3 main.py --gui --viz-hz 33  # GUI at 33 Hz render rate
+    python3 main.py                                # headless, 1000 cycles
+    python3 main.py --gui                          # GUI at 10 Hz, 1000 cycles
+    python3 main.py --gui --viz-hz 33              # GUI at 33 Hz
+    python3 main.py --gui --duration 2000 --hold   # 2000 cycles, inspect final pose
 """
 import argparse
+import time
+import pybullet as p
 from HeartBeat import Siclo1Controller
 
 
@@ -18,6 +21,10 @@ def _make_parser() -> argparse.ArgumentParser:
                         help="Enable PyBullet GUI viewer and debug visualisation")
     parser.add_argument("--viz-hz", type=int, default=10, metavar="HZ",
                         help="GUI render rate Hz, integer only (default: 10, range: 1-100)")
+    parser.add_argument("--duration", type=int, default=1000, metavar="CYCLES",
+                        help="Number of active HeartBeat cycles to run (default: 1000)")
+    parser.add_argument("--hold", action="store_true",
+                        help="Keep GUI window open after summary for pose inspection")
     return parser
 
 
@@ -36,11 +43,24 @@ def main(argv=None) -> None:
     decimation = _viz_decimation(args.viz_hz)
     controller = Siclo1Controller(use_gui=args.gui, viz_decimation=decimation)
     try:
-        controller.run(max_cycles=1000)
+        controller.run(max_cycles=args.duration)
     except KeyboardInterrupt:
         print("\n[Siclo1] Interrupted.")
     finally:
         controller.finalize_telemetry()
+
+        if args.hold:
+            if controller.gui_client is not None:
+                print("[Siclo1] --hold active. Inspect final pose. Ctrl-C to exit.")
+                try:
+                    while p.isConnected(physicsClientId=controller.gui_client):
+                        p.stepSimulation(physicsClientId=controller.physics_client)
+                        time.sleep(0.01)  # 100 Hz physics keep; non-blocking GUI
+                except KeyboardInterrupt:
+                    print("\n[Siclo1] Hold ended.")
+            else:
+                print("[Siclo1] --hold ignored: no GUI client active (use --gui)")
+
         controller.shutdown()
 
 

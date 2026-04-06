@@ -91,3 +91,62 @@ def test_shutdown_skips_join_when_already_finalized():
 
     mock_thread.stop.assert_not_called()
     mock_thread.join.assert_not_called()
+
+
+# ── --duration flag ────────────────────────────────────────────────────────── #
+
+def test_default_duration():
+    args = _make_parser().parse_args([])
+    assert args.duration == 1000
+
+
+def test_duration_parsed():
+    args = _make_parser().parse_args(["--duration", "2000"])
+    assert args.duration == 2000
+
+
+# ── --hold flag ────────────────────────────────────────────────────────────── #
+
+def test_default_hold():
+    args = _make_parser().parse_args([])
+    assert args.hold is False
+
+
+def test_hold_flag():
+    args = _make_parser().parse_args(["--hold"])
+    assert args.hold is True
+
+
+# ── hold loop behaviour ────────────────────────────────────────────────────── #
+
+def test_hold_with_gui_steps_physics(capsys):
+    """--hold with active GUI: stepSimulation called once before isConnected→False."""
+    mock_ctrl = MagicMock()
+    mock_ctrl.gui_client = 99          # non-None → GUI active
+    mock_ctrl.physics_client = 0
+
+    with patch('main.Siclo1Controller', return_value=mock_ctrl):
+        with patch('main.p') as mock_p:
+            with patch('main.time') as mock_time:
+                mock_p.isConnected.side_effect = [True, False]
+                main(["--gui", "--duration", "0", "--hold"])
+
+    mock_p.stepSimulation.assert_called_once_with(physicsClientId=0)
+    mock_ctrl.finalize_telemetry.assert_called_once()
+    mock_ctrl.shutdown.assert_called_once()
+
+
+def test_hold_without_gui_prints_warning(capsys):
+    """--hold without --gui: warning printed, stepSimulation never called."""
+    mock_ctrl = MagicMock()
+    mock_ctrl.gui_client = None        # no GUI
+
+    with patch('main.Siclo1Controller', return_value=mock_ctrl):
+        with patch('main.p') as mock_p:
+            main(["--duration", "0", "--hold"])
+
+    captured = capsys.readouterr()
+    assert "--hold ignored" in captured.out
+    mock_p.isConnected.assert_not_called()
+    mock_ctrl.finalize_telemetry.assert_called_once()
+    mock_ctrl.shutdown.assert_called_once()
