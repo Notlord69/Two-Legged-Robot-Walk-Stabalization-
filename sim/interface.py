@@ -129,3 +129,13 @@ def remove_debug_line(item_id: int, physics_client: int = 0) -> None:
     import pybullet as p                       # deferred: not needed for URDF-only callers
     if item_id >= 0:
         p.removeUserDebugItem(item_id, physicsClientId=physics_client)
+
+
+def step_simulation(physics_client: int) -> None:
+    """Advance physics by one timestep.
+
+    physics_client: PyBullet client ID returned by p.connect()
+    All p.* calls are confined to this file (CLAUDE.md).
+    """
+    import pybullet as p                       # deferred: not needed for URDF-only callers
+    p.stepSimulation(physicsClientId=physics_client)

@@ -8,7 +8,7 @@ NON-DESTRUCTIVE rewrite of HeartBeat.py targeting strict 100 Hz (≤10 ms).
 Changes from original HeartBeat.py
 ───────────────────────────────────
 1. Physics runs on p.DIRECT (headless) — no GUI render stall.
-   Optional p.GUI viewer connected via SHARED_MEMORY at 10 Hz.
+   Optional p.GUI viewer connected as a second p.connect(p.GUI) client at decimated rate.
 2. Deterministic hybrid spin-wait replaces time.sleep().
 3. URDF link positions populated from PyBullet getLinkState() every cycle
    so stability.py avoids the expensive forward_kinematics_2d() fallback.
@@ -44,6 +44,7 @@ from shared_state import (
     ERR_TIMING_VIOLATION,
     ERR_MID_CYCLE_OVERRUN,
 )
+import sim.interface
 import perception
 import stability
 import recovery
@@ -377,6 +378,8 @@ class Siclo1Controller:
     """100 Hz headless controller with optional decimated GUI."""
 
     def __init__(self, use_gui: bool = False, viz_decimation: int = 10):
+        if viz_decimation < 1:
+            raise ValueError(f"viz_decimation must be >= 1, got {viz_decimation}")
         self.use_gui = use_gui
         self.viz_decimation: int = viz_decimation  # cycles between GUI renders
         self._visualizer = None                    # set after warmup if GUI mode
@@ -423,13 +426,15 @@ class Siclo1Controller:
         # 7. If GUI, mirror the scene
         if self.gui_client is not None:
             try:
-                p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0) # Hide the sidebars
-                p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0) # Turn OFF auto-rendering
+                p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0,
+                                           physicsClientId=self.gui_client)  # Hide sidebars
+                p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0,
+                                           physicsClientId=self.gui_client)  # Batch renders
                 p.setGravity(0, 0, -9.81, physicsClientId=self.gui_client)
                 p.setAdditionalSearchPath(pybullet_data.getDataPath())
                 p.loadURDF("plane.urdf", physicsClientId=self.gui_client)
                 p.setAdditionalSearchPath(os.path.dirname(urdf_file))
-                p.loadURDF(
+                self._gui_robot_id: int = p.loadURDF(
                     urdf_file,
                     basePosition=[0.0, 0.0, URDF_SPAWN_Z],
                     physicsClientId=self.gui_client,
@@ -486,7 +491,7 @@ class Siclo1Controller:
             active_balance.update_active_balance()
             recovery.update_recovery()
             self.pybullet.apply_control()
-            p.stepSimulation(physicsClientId=self.physics_client)
+            sim.interface.step_simulation(self.physics_client)
 
     # ------------------------------------------------------------------ #
     def step(self) -> bool:
@@ -544,7 +549,7 @@ class Siclo1Controller:
         self.pybullet.apply_control()
 
         # 10. Physics step — DIRECT only (no render stall)
-        p.stepSimulation(physicsClientId=self.physics_client)
+        sim.interface.step_simulation(self.physics_client)
         
         # 11. Advance counters
         shared_state.cycle_count += 1
@@ -591,12 +596,12 @@ class Siclo1Controller:
             pos, orn = p.getBasePositionAndOrientation(
                 rid_phys, physicsClientId=pc_phys)
             p.resetBasePositionAndOrientation(
-                1, pos, orn, physicsClientId=pc_gui)  # robot is body 1 in GUI
+                self._gui_robot_id, pos, orn, physicsClientId=pc_gui)
 
             # Mirror joint positions
             for jname, jid in self.pybullet._joint_list:
                 js = p.getJointState(rid_phys, jid, physicsClientId=pc_phys)
-                p.resetJointState(1, jid, js[0], js[1],
+                p.resetJointState(self._gui_robot_id, jid, js[0], js[1],
                                   physicsClientId=pc_gui)
             # Update debug visualisation (annulus arcs + hip→foot vectors)
             if self._visualizer is not None:

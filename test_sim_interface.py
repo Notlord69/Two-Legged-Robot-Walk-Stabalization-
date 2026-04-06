@@ -47,3 +47,10 @@ def test_add_debug_line_passes_physics_client():
         add_debug_line([0, 0, 0], [1, 0, 0], [1, 1, 0], physics_client=3)
     kwargs = mock_add.call_args[1]
     assert kwargs['physicsClientId'] == 3
+
+
+def test_step_simulation_calls_pybullet_step():
+    with patch('pybullet.stepSimulation') as mock_step:
+        from sim.interface import step_simulation
+        step_simulation(physics_client=2)
+    mock_step.assert_called_once_with(physicsClientId=2)
