@@ -47,13 +47,44 @@ The physics loop always runs at 100 Hz. The GUI renders every `100 ÷ viz_hz` ph
 
 ---
 
+### `--duration CYCLES`
+
+| Property | Value |
+|---|---|
+| Type | integer |
+| Default | `1000` |
+| Unit | HeartBeat cycles (100 Hz loop iterations) |
+
+**Effect:** `run()` executes exactly `CYCLES` active control cycles. Warmup cycles are separate and not counted.
+
+| `--duration` | Simulation time equivalent | Use case |
+|---|---|---|
+| `500`  | 5 s  | Smoke test |
+| `1000` | 10 s | Default |
+| `2000` | 20 s | Extended stability check |
+| `5000` | 50 s | Marathon run |
+
+---
+
+### `--hold`
+
+| Property | Value |
+|---|---|
+| Type | boolean (store_true) |
+| Default | off |
+| Requires | `--gui` (prints warning and skips if no GUI client) |
+
+**Effect:** After the Performance Summary is printed and the telemetry CSV is flushed, enters a low-priority physics loop at ~100 Hz. The GUI window stays open and fully interactive (camera rotate/zoom). Robot remains physically simulated — joints settle under gravity. Exit with `Ctrl-C`.
+
+---
+
 ## Examples
 
 ```bash
-# Headless — maximum physics throughput, 50-cycle warmup
-python3 main.py
+# Headless smoke test — 500 cycles, maximum physics throughput
+python3 main.py --duration 500
 
-# GUI at default 10 Hz render rate
+# GUI at default 10 Hz, default 1000 cycles
 python3 main.py --gui
 
 # GUI at ~33 Hz render rate (smoother, higher GPU load)
@@ -61,6 +92,15 @@ python3 main.py --gui --viz-hz 33
 
 # GUI at 1 Hz — slow-motion, useful for inspecting debug markers
 python3 main.py --gui --viz-hz 1
+
+# Marathon run — 5000 cycles, no hold
+python3 main.py --gui --duration 5000
+
+# Hold inspect — 2000 cycles, keep window open to check final pose
+python3 main.py --gui --duration 2000 --hold
+
+# Slow-motion hold — 500 cycles at 1 Hz render, then inspect
+python3 main.py --gui --viz-hz 1 --duration 500 --hold
 ```
 
 ---
@@ -76,3 +116,15 @@ When `--gui` is active, three overlays appear in the PyBullet window:
 | Hip → Foot (target) | Red | IK foot target (hidden until gait planner sets a target) |
 
 The arcs follow the robot as it moves. Lines are replaced in-place each render tick (no accumulation).
+
+---
+
+## Run Profiles
+
+| Profile | Command | Purpose |
+|---|---|---|
+| Smoke Test | `python3 main.py --duration 500` | Fast headless sanity check after a code change |
+| Standard | `python3 main.py --gui --duration 1000` | Default interactive run |
+| Marathon | `python3 main.py --gui --duration 5000` | Extended stability / jitter measurement |
+| Hold Inspect | `python3 main.py --gui --duration 2000 --hold` | Inspect 687 mm shank final position |
+| Debug Slow-mo | `python3 main.py --gui --viz-hz 1 --duration 200 --hold` | Frame-by-frame visual debug |
