@@ -123,6 +123,15 @@ class SystemStatus(Enum):
     EMERGENCY = auto()
 
 
+class MissionState(Enum):
+    """Gait state machine states for the Dynamic Gait Controller."""
+    IDLE  = auto()
+    RAMP  = auto()
+    WALK  = auto()
+    DECEL = auto()
+    STOP  = auto()
+
+
 # ============================================================================
 # SHARED STATE CLASS
 # ============================================================================
@@ -263,6 +272,38 @@ class Siclo1State:
         # Default (0,0,0) = no active target; visualiser skips red line.
         self.left_foot_target:  tuple = (0.0, 0.0, 0.0)
         self.right_foot_target: tuple = (0.0, 0.0, 0.0)
+
+        # ====================================================================
+        # DYNAMIC GAIT CONTROLLER STATE
+        # ====================================================================
+
+        # Ground Reaction Force correction torques (N·m, per URDF joint name).
+        # Written by grf.py; merged into applied torques by HeartBeat.apply_control().
+        self.grf_torque_correction: Dict[str, float] = {}
+
+        # Which leg is currently in swing phase.
+        # Written by gait_planner.py.
+        self.active_swing_side: str = "left"
+
+        # Total steps completed in the current mission.
+        # Written by gait_planner.py; read by mission.py.
+        self.step_count: int = 0
+
+        # X-position of swing foot at toe-off (m, world frame).
+        # Written by gait_planner.py at swing start; persists across loop iterations.
+        self.swing_foot_x_stance: float = 0.0
+
+        # Gait state machine state.
+        # Written by mission.py; read by grf.py and gait_planner.py.
+        self.mission_state: MissionState = MissionState.IDLE
+
+        # Steps remaining until stop command is satisfied.
+        # Written by mission.py.
+        self.steps_remaining: int = 0
+
+        # Torque scale factor ∈ [0, 1]. Ramped up by RAMP state, down by STOP state.
+        # Written by mission.py; read by grf.py and gait_planner.py.
+        self.ramp_gain: float = 0.0
 
         # ====================================================================
         # SYSTEM HEALTH
