@@ -49,6 +49,10 @@ import perception
 import stability
 import recovery
 import active_balance
+import grf
+import gait_planner
+import mission
+from mission import MissionController
 from telemetry import TelemetryThread
 
 
@@ -63,6 +67,24 @@ OVERRUN_LIMIT: float = TARGET_DT      # 10 ms hard ceiling
 
 # Maximum log buffer size (printed at end of run, not during)
 LOG_BUFFER_SIZE: int = 2000
+
+# WBC joint-space PD gains — converts IK angle targets to additive torques.
+# These are tuning parameters, not URDF-derived.
+WBC_KP: float = 200.0   # N·m/rad, joint position proportional gain
+WBC_KD: float = 15.0    # N·m·s/rad, joint velocity derivative gain
+
+# WBC joint mapping: (IK angle index, URDF joint name, sign)
+# sign: +1 for right (axis +X), -1 for left (axis -X)
+_WBC_LEFT_JOINTS = [
+    (0, 'Left_Hip_Forwards', -1.0),   # hip_pitch  (axis = -X)
+    (1, 'Left_Knee',         -1.0),   # knee       (axis = -X)
+    (2, 'Left_Ankle',        -1.0),   # ankle      (axis ≈ -Z, neutral = 0)
+]
+_WBC_RIGHT_JOINTS = [
+    (0, 'Right_Hip_Fowards', +1.0),   # hip_pitch  (axis = +X)
+    (1, 'Right_Knee',        +1.0),   # knee       (axis = +X)
+    (2, 'Right_Ankle',       +1.0),   # ankle      (axis ≈ -Z, neutral = 0)
+]
 
 
 # ============================================================================
@@ -355,13 +377,16 @@ class PyBulletInterface:
 
         rid = self.robot_id
         pc  = self.pc
-        torques = getattr(self.shared_state, 'target_torques', {})
+        torques  = getattr(self.shared_state, 'target_torques', {})
+        grf_corr = getattr(self.shared_state, 'grf_torque_correction', {})
 
         for jname, raw_torque in torques.items():
             jid = self.joint_ids.get(jname)
             if jid is None:
                 continue
-            clipped = _clip_effort(jname, raw_torque)
+            # Merge GRF additive correction and clip to URDF effort limit
+            merged  = raw_torque + grf_corr.get(jname, 0.0)
+            clipped = _clip_effort(jname, merged)
             p.setJointMotorControl2(
                 rid, jid,
                 controlMode=p.TORQUE_CONTROL,
@@ -377,7 +402,8 @@ class PyBulletInterface:
 class Siclo1Controller:
     """100 Hz headless controller with optional decimated GUI."""
 
-    def __init__(self, use_gui: bool = False, viz_decimation: int = 10):
+    def __init__(self, use_gui: bool = False, viz_decimation: int = 10,
+                 walk_distance: float = None):
         if viz_decimation < 1:
             raise ValueError(f"viz_decimation must be >= 1, got {viz_decimation}")
         self.use_gui = use_gui
@@ -392,7 +418,8 @@ class Siclo1Controller:
         if use_gui:
             try:
                 self.gui_client = p.connect(p.GUI)
-                time.sleep(2.0)  # X-server buffer — wait for window to appear (WSL)
+                time.sleep(1.0)  # X-server buffer — wait for window to appear (WSL)
+                p.removeAllUserDebugItems(physicsClientId=self.gui_client)  # clear comms pipe before spawn
             except Exception:
                 self.gui_client = None
 
@@ -415,8 +442,17 @@ class Siclo1Controller:
         if not os.path.isfile(urdf_file):
             print(f"[CRITICAL] Siclo1.urdf not found in {current_folder}")
             sys.exit(1)
+        print(f"[Siclo1] URDF path: {os.path.abspath(urdf_file)}")
 
         self.pybullet.load_robot(urdf_path=urdf_file)
+
+        # Spawn guard: refuse to run a ghost simulation
+        _body_count = p.getNumBodies(physicsClientId=self.physics_client)
+        if _body_count == 0 or self.pybullet.robot_id is None:
+            raise RuntimeError(
+                f"[Siclo1] URDF spawn failed — body_count={_body_count}, "
+                f"robot_id={self.pybullet.robot_id}. Cannot run ghost simulation."
+            )
 
         # Hip-pitch child link names (child of Left_Hip_Forwards / Right_Hip_Fowards).
         # Used by DebugVisualizer to read world-space hip positions.
@@ -424,24 +460,37 @@ class Siclo1Controller:
         self._right_hip_link = "Right_Upper_Leg_1"  # URDF-verified 2026-04-05
 
         # 7. If GUI, mirror the scene
+        self._gui_robot_id: int = -1  # -1 = not loaded; guards _sync_gui() and DebugVisualizer
         if self.gui_client is not None:
             try:
                 p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0,
-                                           physicsClientId=self.gui_client)  # Hide sidebars
+                                           physicsClientId=self.gui_client)  # hide sidebars
                 p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0,
-                                           physicsClientId=self.gui_client)  # Batch renders
+                                           physicsClientId=self.gui_client)  # batch: suppress flicker during load
                 p.setGravity(0, 0, -9.81, physicsClientId=self.gui_client)
                 p.setAdditionalSearchPath(pybullet_data.getDataPath())
                 p.loadURDF("plane.urdf", physicsClientId=self.gui_client)
                 p.setAdditionalSearchPath(os.path.dirname(urdf_file))
-                self._gui_robot_id: int = p.loadURDF(
+                self._gui_robot_id = p.loadURDF(
                     urdf_file,
                     basePosition=[0.0, 0.0, URDF_SPAWN_Z],
                     physicsClientId=self.gui_client,
                     flags=p.URDF_USE_INERTIA_FROM_FILE,
                 )
-            except Exception:
-                pass
+                # Re-enable rendering now that all bodies are loaded
+                p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1,
+                                           physicsClientId=self.gui_client)
+                # Aim the camera at the robot's torso
+                p.resetDebugVisualizerCamera(
+                    cameraDistance=1.5,
+                    cameraYaw=90,
+                    cameraPitch=-20,
+                    cameraTargetPosition=[0, 0, 0.5],
+                    physicsClientId=self.gui_client,
+                )
+            except Exception as e:
+                print(f"[Siclo1][WARN] GUI robot load failed: {e}")
+                self._gui_robot_id = -1
 
         # 8. Pre-cache mass totals (avoid per-cycle reparse)
         self._total_link_mass = sum(
@@ -466,6 +515,10 @@ class Siclo1Controller:
 
         # Warmup: settle physics before real-time loop.
         # GUI mode gets fewer cycles (window already visible); Direct gets more.
+        # Mission controller — manages gait state machine and ramp_gain.
+        # Created before _warmup so _mission is available inside the warmup loop.
+        self._mission = MissionController(walk_distance=walk_distance)
+
         warmup_cycles = 5 if self.use_gui else 50
         self._warmup(warmup_cycles)
         self._telemetry_thread.log(f"  Warmup cycles: {warmup_cycles}")
@@ -474,6 +527,35 @@ class Siclo1Controller:
         if self.gui_client is not None:
             from viz.debug_markers import DebugVisualizer
             self._visualizer = DebugVisualizer(self.gui_client)
+
+    # ------------------------------------------------------------------ #
+    def _wbc_step(self) -> None:
+        """Joint-space PD controller: IK angles → additive torques in target_torques.
+
+        Reads ik_left_angles and ik_right_angles (URDF-signed rad).
+        Computes PD torque for each leg joint and adds to shared_state.target_torques.
+        GRF corrections are NOT merged here — handled in apply_control().
+        """
+        torques = getattr(shared_state, 'target_torques', {})
+
+        jp = shared_state.joint_positions
+        jv = shared_state.joint_velocities
+
+        for idx, jname, _ in _WBC_LEFT_JOINTS:
+            theta_target = shared_state.ik_left_angles[idx]
+            theta_now    = jp.get(jname, 0.0)
+            omega_now    = jv.get(jname, 0.0)
+            tau = WBC_KP * (theta_target - theta_now) - WBC_KD * omega_now
+            torques[jname] = torques.get(jname, 0.0) + _clip_effort(jname, tau)
+
+        for idx, jname, _ in _WBC_RIGHT_JOINTS:
+            theta_target = shared_state.ik_right_angles[idx]
+            theta_now    = jp.get(jname, 0.0)
+            omega_now    = jv.get(jname, 0.0)
+            tau = WBC_KP * (theta_target - theta_now) - WBC_KD * omega_now
+            torques[jname] = torques.get(jname, 0.0) + _clip_effort(jname, tau)
+
+        shared_state.target_torques = torques
 
     # ------------------------------------------------------------------ #
     def _warmup(self, cycles: int) -> None:
@@ -489,6 +571,10 @@ class Siclo1Controller:
             perception.update_perception()
             stability.update_stability(dt=TARGET_DT)
             active_balance.update_active_balance()
+            grf.update_grf()
+            gait_planner.update_gait_planner()
+            self._mission.update()
+            self._wbc_step()
             recovery.update_recovery()
             self.pybullet.apply_control()
             sim.interface.step_simulation(self.physics_client)
@@ -538,27 +624,39 @@ class Siclo1Controller:
         # 6. Active balance
         active_balance.update_active_balance()
 
-        # 7. Emergency gate
+        # 7. GRF — virtual spring-damper torque corrections
+        grf.update_grf()
+
+        # 8. Gait Planner — swing arc + IK angle targets
+        gait_planner.update_gait_planner()
+
+        # 9. Mission — state machine, ramp_gain, step counting
+        self._mission.update()
+
+        # 10. WBC — IK angles → additive joint PD torques
+        self._wbc_step()
+
+        # 11. Emergency gate
         if shared_state.emergency_stop_triggered:
             return False
 
-        # 8. Recovery
+        # 12. Recovery
         recovery.update_recovery()
 
-        # 9. Control
+        # 13. Control
         self.pybullet.apply_control()
 
-        # 10. Physics step — DIRECT only (no render stall)
+        # 14. Physics step — DIRECT only (no render stall)
         sim.interface.step_simulation(self.physics_client)
-        
-        # 11. Advance counters
+
+        # 15. Advance counters
         shared_state.cycle_count += 1
         shared_state.sim_time   += TARGET_DT
 
-        # 13. End cycle (deterministic wait)
+        # 16. End cycle (deterministic wait)
         violation, comp_time = self.heartbeat.end_cycle()
 
-        # 14. Write telemetry (zero-alloc: reuse scratch row)
+        # 17. Write telemetry (zero-alloc: reuse scratch row)
         row = shared_state._telem_row
         row[0] = shared_state.sim_time
         row[1] = shared_state.cycle_count
@@ -577,7 +675,7 @@ class Siclo1Controller:
             row[2] = ERR_TIMING_VIOLATION
         shared_state.telemetry.write(row)
 
-        # 15. Optional GUI sync (decimated — every viz_decimation cycles)
+        # 18. Optional GUI sync (decimated — every viz_decimation cycles)
         if (self.gui_client is not None and
                 shared_state.cycle_count % self.viz_decimation == 0):
             self._sync_gui()
@@ -587,6 +685,8 @@ class Siclo1Controller:
     # ------------------------------------------------------------------ #
     def _sync_gui(self) -> None:
         """Mirror joint states to the GUI client at decimated rate."""
+        if self._gui_robot_id < 0:
+            return  # GUI robot not loaded — skip silently
         try:
             rid_phys = self.pybullet.robot_id
             pc_phys  = self.physics_client
