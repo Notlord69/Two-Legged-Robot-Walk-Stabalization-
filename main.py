@@ -6,6 +6,8 @@ Usage:
     python3 main.py --gui                          # GUI at 10 Hz, 1000 cycles
     python3 main.py --gui --viz-hz 33              # GUI at 33 Hz
     python3 main.py --gui --duration 2000 --hold   # 2000 cycles, inspect final pose
+    python3 main.py --walk 2.0                     # walk 2.0 m headless
+    python3 main.py --gui --walk 2.0               # walk 2.0 m with GUI
 """
 import argparse
 import time
@@ -25,6 +27,8 @@ def _make_parser() -> argparse.ArgumentParser:
                         help="Number of active HeartBeat cycles to run (default: 1000)")
     parser.add_argument("--hold", action="store_true",
                         help="Keep GUI window open after summary for pose inspection")
+    parser.add_argument("--walk", type=float, default=None, metavar="METRES",
+                        help="Walk forward D metres then stop (e.g. --walk 2.0)")
     return parser
 
 
@@ -41,7 +45,8 @@ def _viz_decimation(viz_hz: int) -> int:
 def main(argv=None) -> None:
     args = _make_parser().parse_args(argv)
     decimation = _viz_decimation(args.viz_hz)
-    controller = Siclo1Controller(use_gui=args.gui, viz_decimation=decimation)
+    controller = Siclo1Controller(use_gui=args.gui, viz_decimation=decimation,
+                                  walk_distance=args.walk)
     try:
         controller.run(max_cycles=args.duration)
     except KeyboardInterrupt:
