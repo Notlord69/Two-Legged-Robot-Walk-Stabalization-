@@ -105,3 +105,114 @@ class TestGUISyncThreadSlot:
         assert meta['video_path'].endswith('walk.mp4')
         assert meta['video_fps'] == 30
         assert meta['video_frames'] == 0
+
+
+# --------------------------------------------------------------------------- #
+class TestGUISyncThreadMP4Lifecycle:
+
+    def test_start_logging_called_on_ramp_entry(self):
+        """startStateLogging fires exactly once on IDLE → RAMP."""
+        with patch('HeartBeat.p') as mock_p:
+            mock_p.STATE_LOGGING_VIDEO_MP4 = 1
+            mock_p.startStateLogging.return_value = 42
+            from HeartBeat import GUISyncThread
+            t = GUISyncThread(
+                gui_client=5, gui_robot_id=1,
+                joint_list=[], session_path='/tmp/ts', viz_fps=30,
+                walk_active=True, visualizer=None,
+                left_hip_link='L', right_hip_link='R',
+            )
+            t._prev_mission_state = MissionState.IDLE
+            snap = _make_snapshot(MissionState.RAMP)
+            t._handle_mp4_lifecycle(snap)
+
+            mock_p.startStateLogging.assert_called_once_with(
+                1, t._video_path, physicsClientId=5
+            )
+            assert t._log_id == 42
+
+    def test_start_logging_not_called_when_already_ramp(self):
+        """No duplicate startStateLogging if already in RAMP."""
+        with patch('HeartBeat.p') as mock_p:
+            mock_p.STATE_LOGGING_VIDEO_MP4 = 1
+            from HeartBeat import GUISyncThread
+            t = GUISyncThread(
+                gui_client=5, gui_robot_id=1,
+                joint_list=[], session_path='/tmp/ts', viz_fps=30,
+                walk_active=True, visualizer=None,
+                left_hip_link='L', right_hip_link='R',
+            )
+            t._prev_mission_state = MissionState.RAMP   # already in RAMP
+            t._log_id = 10                               # already recording
+            snap = _make_snapshot(MissionState.RAMP)
+            t._handle_mp4_lifecycle(snap)
+
+            mock_p.startStateLogging.assert_not_called()
+
+    def test_stop_logging_called_on_idle_reentry(self):
+        """stopStateLogging fires on STOP → IDLE."""
+        with patch('HeartBeat.p') as mock_p:
+            from HeartBeat import GUISyncThread
+            t = GUISyncThread(
+                gui_client=5, gui_robot_id=1,
+                joint_list=[], session_path='/tmp/ts', viz_fps=30,
+                walk_active=True, visualizer=None,
+                left_hip_link='L', right_hip_link='R',
+            )
+            t._log_id = 42
+            t._prev_mission_state = MissionState.STOP
+            snap = _make_snapshot(MissionState.IDLE)
+            t._handle_mp4_lifecycle(snap)
+
+            mock_p.stopStateLogging.assert_called_once_with(42, physicsClientId=5)
+            assert t._log_id is None
+
+    def test_stop_logging_called_on_emergency(self):
+        """stopStateLogging fires immediately when emergency_stop=True."""
+        with patch('HeartBeat.p') as mock_p:
+            from HeartBeat import GUISyncThread
+            t = GUISyncThread(
+                gui_client=5, gui_robot_id=1,
+                joint_list=[], session_path='/tmp/ts', viz_fps=30,
+                walk_active=True, visualizer=None,
+                left_hip_link='L', right_hip_link='R',
+            )
+            t._log_id = 77
+            t._prev_mission_state = MissionState.WALK
+            snap = _make_snapshot(MissionState.WALK, emergency=True)
+            t._handle_mp4_lifecycle(snap)
+
+            mock_p.stopStateLogging.assert_called_once_with(77, physicsClientId=5)
+            assert t._log_id is None
+
+    def test_no_recording_when_walk_inactive(self):
+        """No startStateLogging when walk_active=False."""
+        with patch('HeartBeat.p') as mock_p:
+            mock_p.STATE_LOGGING_VIDEO_MP4 = 1
+            from HeartBeat import GUISyncThread
+            t = GUISyncThread(
+                gui_client=5, gui_robot_id=1,
+                joint_list=[], session_path='/tmp/ts', viz_fps=30,
+                walk_active=False, visualizer=None,
+                left_hip_link='L', right_hip_link='R',
+            )
+            t._prev_mission_state = MissionState.IDLE
+            snap = _make_snapshot(MissionState.RAMP)
+            t._handle_mp4_lifecycle(snap)
+
+            mock_p.startStateLogging.assert_not_called()
+
+    def test_stop_safety_net_closes_open_log(self):
+        """stop() calls stopStateLogging if _log_id is still open."""
+        with patch('HeartBeat.p') as mock_p:
+            from HeartBeat import GUISyncThread
+            t = GUISyncThread(
+                gui_client=5, gui_robot_id=1,
+                joint_list=[], session_path='/tmp/ts', viz_fps=30,
+                walk_active=True, visualizer=None,
+                left_hip_link='L', right_hip_link='R',
+            )
+            t._log_id = 99
+            t.stop()
+            mock_p.stopStateLogging.assert_called_once_with(99, physicsClientId=5)
+            assert t._log_id is None

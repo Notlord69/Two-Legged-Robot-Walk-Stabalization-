@@ -507,8 +507,38 @@ class GUISyncThread(threading.Thread):
 
     # ------------------------------------------------------------------ #
     def _handle_mp4_lifecycle(self, snapshot: PoseSnapshot) -> None:
-        """Placeholder — filled in Task 2."""
-        pass
+        """Start/stop MP4 logging on mission state transitions.
+
+        Edges watched:
+          ANY → RAMP  : start recording (if walk_active and not already recording)
+          ANY → IDLE  : stop recording  (mission completed cleanly)
+          emergency   : stop recording  (safe freeze triggered)
+        Called by run() before updating _prev_mission_state.
+        """
+        if not self._walk_active:
+            return
+
+        prev = self._prev_mission_state
+        curr = snapshot.mission_state
+
+        # Start on RAMP entry
+        if prev != MissionState.RAMP and curr == MissionState.RAMP:
+            if self._log_id is None:
+                self._log_id = p.startStateLogging(
+                    p.STATE_LOGGING_VIDEO_MP4,
+                    self._video_path,
+                    physicsClientId=self._gui_client,
+                )
+
+        # Stop on clean IDLE re-entry or emergency
+        if self._log_id is not None:
+            stop_now = (
+                (prev != MissionState.IDLE and curr == MissionState.IDLE)
+                or snapshot.emergency_stop
+            )
+            if stop_now:
+                p.stopStateLogging(self._log_id, physicsClientId=self._gui_client)
+                self._log_id = None
 
 
 # ============================================================================
