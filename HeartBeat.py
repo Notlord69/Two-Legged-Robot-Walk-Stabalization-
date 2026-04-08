@@ -27,10 +27,12 @@ import os
 import sys
 import time
 import threading
+from dataclasses import dataclass
+from typing import Optional, Tuple, Dict, Any
+
 import numpy as np
 import pybullet as p
 import pybullet_data
-from typing import Optional, Tuple, Dict
 
 from shared_state import (
     shared_state,
@@ -38,6 +40,7 @@ from shared_state import (
     TelemetryRingBuffer,
     SystemStatus,
     ContactState,
+    MissionState,
     URDF_JOINT_NAMES,
     URDF_JOINT_LIMITS,
     DEFAULT_LINK_DATA,
@@ -393,6 +396,119 @@ class PyBulletInterface:
                 force=clipped,
                 physicsClientId=pc,
             )
+
+
+# ============================================================================
+# POSE SNAPSHOT  — immutable robot state for GUI thread handoff
+# ============================================================================
+
+@dataclass
+class PoseSnapshot:
+    """Frozen robot state written by the 100 Hz loop; read by GUISyncThread.
+
+    One slot shared between producer and consumer.
+    Producer writes at 100 Hz (non-blocking); consumer reads at viz_fps Hz.
+    """
+    base_pos:       tuple        # (x, y, z) world position
+    base_orn:       tuple        # quaternion (x, y, z, w)
+    joint_states:   dict         # {joint_name: (position_rad, velocity_rad_s)}
+    link_positions: dict         # {link_name: [x, y, z]} for DebugVisualizer
+    mission_state:  MissionState
+    emergency_stop: bool
+
+
+# ============================================================================
+# GUI SYNC THREAD  — owns gui_client after init; decouples V-Sync from 100 Hz
+# ============================================================================
+
+class GUISyncThread(threading.Thread):
+    """Daemon thread: mirrors robot pose to GUI client at viz_fps Hz.
+
+    Renders MP4 frames via p.stepSimulation(gui_client) — the only trigger
+    for PyBullet's internal video encoder.  Starts/stops MP4 logging on
+    mission state transitions.  Never called from the 100 Hz hot path.
+    """
+
+    daemon = True
+
+    def __init__(
+        self,
+        gui_client:     int,
+        gui_robot_id:   int,
+        joint_list:     list,
+        session_path:   str,
+        viz_fps:        int,
+        walk_active:    bool,
+        visualizer:     Any,
+        left_hip_link:  str,
+        right_hip_link: str,
+    ) -> None:
+        super().__init__(name='GUISyncThread')
+        self._gui_client    = gui_client
+        self._gui_robot_id  = gui_robot_id
+        self._joint_list    = joint_list
+        self._viz_fps       = viz_fps
+        self._walk_active   = walk_active
+        self._visualizer    = visualizer
+        self._left_hip_link  = left_hip_link
+        self._right_hip_link = right_hip_link
+
+        self._video_path: str = os.path.join(session_path, "walk.mp4")
+
+        # Slot — one shared PoseSnapshot, protected by a lock
+        self._lock:  threading.Lock             = threading.Lock()
+        self._slot:  Optional[PoseSnapshot]     = None
+
+        # MP4 state
+        self._log_id:  Optional[int]  = None
+        self._prev_mission_state: MissionState  = MissionState.IDLE
+
+        # Frame counter — GIL-safe int read from step()
+        self._video_frame_count: int = 0
+
+        self._stop_event = threading.Event()
+
+        # Prevent GUI client from self-advancing time
+        p.setRealTimeSimulation(0, physicsClientId=self._gui_client)
+
+    # ------------------------------------------------------------------ #
+    @property
+    def video_frame_count(self) -> int:
+        """Current captured frame count. GIL-safe int read from 100 Hz loop."""
+        return self._video_frame_count
+
+    # ------------------------------------------------------------------ #
+    def push_pose(self, snapshot: PoseSnapshot) -> None:
+        """Write latest pose snapshot. Non-blocking — skips if thread is rendering."""
+        if self._lock.acquire(blocking=False):
+            self._slot = snapshot
+            self._lock.release()
+
+    # ------------------------------------------------------------------ #
+    def stop(self) -> dict:
+        """Signal thread to stop. Close any open MP4. Return video metadata."""
+        self._stop_event.set()
+        if self._log_id is not None:
+            try:
+                p.stopStateLogging(self._log_id, physicsClientId=self._gui_client)
+            except Exception:
+                pass
+            self._log_id = None
+        return {
+            'video_path':   self._video_path if self._walk_active else None,
+            'video_frames': self._video_frame_count,
+            'video_fps':    self._viz_fps,
+        }
+
+    # ------------------------------------------------------------------ #
+    def run(self) -> None:
+        """Thread loop — placeholder; filled in Task 3."""
+        pass
+
+    # ------------------------------------------------------------------ #
+    def _handle_mp4_lifecycle(self, snapshot: PoseSnapshot) -> None:
+        """Placeholder — filled in Task 2."""
+        pass
 
 
 # ============================================================================
