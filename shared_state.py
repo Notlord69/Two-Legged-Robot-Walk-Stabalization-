@@ -270,8 +270,12 @@ class Siclo1State:
         self.torso_pitch_correction: float = 0.0  # rad, applied to torso pitch joint
 
         # Capture Point — LIPM extrapolated COM (X-Y world frame, metres).
-        # Written by stability.py every 100 Hz cycle; read by gait_planner.py
-        # for foot target placement.
+        # Written by stability.py when support polygon is valid (both paths
+        # that return STABLE or MARGINAL write this). NOT written on the
+        # no-contact early-exit path (stability_status == UNSTABLE, polygon
+        # None/empty) — value is stale from the previous cycle in that case.
+        # Consumers must gate on stability_status before trusting this field.
+        # Read by gait_planner.py for foot target placement.
         self.capture_point: np.ndarray = np.zeros(2)  # m, X-Y world frame
 
         # Per-leg foot targets (m, world frame).
