@@ -111,6 +111,12 @@ class RecoveryController:
         Returns:
             (action, reason)
         """
+        # Reset step timer every cycle in IDLE so timeout checks (P1, P3, P5) never
+        # fire while standing still. Slip (P4) and contact-loss (P2) still evaluate.
+        # Side effect: when IDLE→WALK, timer starts from 0 — watchdog begins clean.
+        if shared_state.mission_state == MissionState.IDLE:
+            shared_state.current_step_start_time = shared_state.sim_time
+
         # Get current state
         step_duration = shared_state.get_step_duration()
         
