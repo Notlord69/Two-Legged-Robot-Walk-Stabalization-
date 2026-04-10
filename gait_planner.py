@@ -40,6 +40,7 @@ Date: April 2026
 import numpy as np
 
 import kinematics
+import recovery   # reset_step() called at touchdown to restart step-duration watchdog
 from shared_state import shared_state, MissionState
 
 
@@ -161,6 +162,7 @@ class GaitPlannerController:
             shared_state.active_swing_side = (
                 "right" if side == "left" else "left"
             )
+            recovery.reset_step()  # restart step-duration watchdog: current_step_start_time = sim_time
 
 
 _gait_planner = GaitPlannerController()

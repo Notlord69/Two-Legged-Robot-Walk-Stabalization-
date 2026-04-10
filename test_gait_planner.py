@@ -132,3 +132,20 @@ def test_decel_halves_step_length():
     expected_decel = cp_x * STEP_TIMING_SCALE + STEP_LENGTH * 0.5
     assert abs(target_walk  - expected_walk)  < 1e-9
     assert abs(target_decel - expected_decel) < 1e-9
+
+
+def test_reset_step_called_at_touchdown():
+    """recovery.reset_step() is called exactly once when swing_phase crosses 1.0."""
+    from unittest.mock import patch
+    from gait_planner import update_gait_planner, SWING_DURATION
+
+    _reset_for_planner()
+    # Set phase so the next update pushes phi past 1.0
+    shared_state.swing_phase = 1.0 - (0.01 / SWING_DURATION) + 1e-9
+
+    with patch('recovery.reset_step') as mock_reset:
+        update_gait_planner()
+
+    mock_reset.assert_called_once()
+    # Also verify step_start_time was updated (reset_step writes sim_time)
+    # We verify the mock was called; the actual write is tested in recovery tests.
