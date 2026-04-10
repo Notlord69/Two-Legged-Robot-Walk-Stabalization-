@@ -205,6 +205,8 @@ class Siclo1State:
         self.right_contact_ticks: int = 0
         self.left_foot_flat: bool = False
         self.right_foot_flat: bool = False
+        self.left_foot_pitch:  float = 0.0   # rad — world-Y pitch of foot link; updated by read_sensors()
+        self.right_foot_pitch: float = 0.0   # rad — world-Y pitch of foot link; updated by read_sensors()
 
         self.left_foot_force: float = 0.0
         self.right_foot_force: float = 0.0
@@ -479,8 +481,10 @@ class Siclo1State:
             self.right_foot_contact_state = ContactState.NO_CONTACT
             self.left_contact_ticks = 0
             self.right_contact_ticks = 0
-            self.left_foot_flat = False
-            self.right_foot_flat = False
+            self.left_foot_flat      = False
+            self.right_foot_flat     = False
+            self.left_foot_pitch     = 0.0
+            self.right_foot_pitch    = 0.0
             self.left_contact_points.clear()
             self.right_contact_points.clear()
             self.recovery_action  = RecoveryAction.NONE
