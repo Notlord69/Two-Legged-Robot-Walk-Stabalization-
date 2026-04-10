@@ -78,3 +78,55 @@ def test_foot_pitch_fields_reset_to_zero():
     shared_state.reset()
     assert shared_state.left_foot_pitch  == 0.0
     assert shared_state.right_foot_pitch == 0.0
+
+
+# ── Task 2 tests ──────────────────────────────────────────────────────────── #
+
+class TestComputeFootFlat:
+    """Unit tests for the _compute_foot_flat pure helper in HeartBeat.py."""
+
+    def test_single_contact_low_pitch_is_flat(self):
+        """Single contact point + pitch 4° (< 7°) → flat confirmed."""
+        from HeartBeat import _compute_foot_flat
+        assert _compute_foot_flat([0.0], math.radians(4.0)) is True
+
+    def test_single_contact_high_pitch_not_flat(self):
+        """Single contact point + pitch 15° (> 7°) → tiptoe, not confirmed."""
+        from HeartBeat import _compute_foot_flat
+        assert _compute_foot_flat([0.0], math.radians(15.0)) is False
+
+    def test_single_contact_exactly_threshold_not_flat(self):
+        """7° exactly is rejected — gate is strictly less than."""
+        from HeartBeat import _compute_foot_flat
+        assert _compute_foot_flat([0.0], math.radians(7.0)) is False
+
+    def test_single_contact_negative_pitch_accepted(self):
+        """Negative pitch (heel slightly raised on opposite side) within 7° → flat."""
+        from HeartBeat import _compute_foot_flat
+        assert _compute_foot_flat([0.0], math.radians(-4.0)) is True
+
+    def test_multi_point_wide_spread_is_flat(self):
+        """Multiple contact points with 3 cm spread → flat regardless of pitch."""
+        from HeartBeat import _compute_foot_flat
+        assert _compute_foot_flat([0.0, 0.03], math.radians(45.0)) is True
+
+    def test_multi_point_narrow_spread_not_flat(self):
+        """Multiple contact points with 0.5 cm spread → NOT flat (below 1 cm gate)."""
+        from HeartBeat import _compute_foot_flat
+        assert _compute_foot_flat([0.0, 0.005], math.radians(0.0)) is False
+
+    def test_no_contact_points_not_flat(self):
+        """Empty contact list → not flat."""
+        from HeartBeat import _compute_foot_flat
+        assert _compute_foot_flat([], math.radians(0.0)) is False
+
+    def test_tick_gate_still_required(self):
+        """Foot flat=True but ticks=2 → state stays CONTACT_TENTATIVE (ticks gate untouched)."""
+        from shared_state import shared_state, ContactState
+        shared_state.reset()
+        perception.reset_perception()
+        shared_state.left_foot_position = np.array([0.0, 0.0, 0.01])
+        shared_state.left_contact_ticks = 2
+        shared_state.left_foot_flat = True
+        state, _ = perception.update_perception()
+        assert state == ContactState.CONTACT_TENTATIVE

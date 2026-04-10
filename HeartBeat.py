@@ -27,6 +27,7 @@ import os
 import sys
 import time
 import threading
+import math
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, Any
 
@@ -183,6 +184,31 @@ class HeartbeatController:
             'violations':     self._violations_count,
             'violation_rate': self._violations_count / max(1, n),
         }
+
+
+# Foot-flat gate — single contact point pitch tolerance
+FLAT_PITCH_THRESHOLD: float = math.radians(7.0)
+# rad — foot-flat gate for single-contact confirmation.
+# At q=0 the URDF foot sole is parallel to the floor (zero plantar-flexion offset).
+# 7° accepts post-bounce settling (0–6°); rejects tiptoe (>20°) and
+# transient heel-strike (8–15°, never accumulates 3 ticks anyway).
+
+
+def _compute_foot_flat(pts_x: list, foot_pitch: float) -> bool:
+    """Pure function: is the foot confirmed flat from contact geometry and pitch?
+
+    pts_x       -- list of contact point X coordinates (world frame, metres).
+    foot_pitch  -- foot link pitch in radians (rotation about world Y, from getLinkState).
+
+    Multi-point path: requires spread > 1 cm (original behaviour).
+    Single-point path: pitch fallback for the PyBullet degenerate case where a
+        stable rectangular box on a flat plane returns only one contact point.
+    """
+    if len(pts_x) > 1:
+        return (max(pts_x) - min(pts_x)) > 0.01
+    if len(pts_x) == 1:
+        return abs(foot_pitch) < FLAT_PITCH_THRESHOLD
+    return False
 
 
 # ============================================================================
@@ -486,14 +512,21 @@ class GUISyncThread(threading.Thread):
 
     # ------------------------------------------------------------------ #
     def stop(self) -> dict:
-        """Signal thread to stop. Close any open MP4. Return video metadata."""
+        """Signal thread to stop. Close any open MP4. Return video metadata.
+
+        Steals _log_id under _lock to prevent a race with _handle_mp4_lifecycle
+        running concurrently on the GUISyncThread.  Must be followed by join()
+        before the caller disconnects the GUI client.
+        """
         self._stop_event.set()
-        if self._log_id is not None:
+        with self._lock:
+            log_id = self._log_id
+            self._log_id = None
+        if log_id is not None:
             try:
-                p.stopStateLogging(self._log_id, physicsClientId=self._gui_client)
+                p.stopStateLogging(log_id, physicsClientId=self._gui_client)
             except Exception:
                 pass
-            self._log_id = None
         return {
             'video_path':   self._video_path if self._walk_active else None,
             'video_frames': self._video_frame_count,
@@ -502,8 +535,48 @@ class GUISyncThread(threading.Thread):
 
     # ------------------------------------------------------------------ #
     def run(self) -> None:
-        """Thread loop — placeholder; filled in Task 3."""
-        pass
+        """~viz_fps Hz render loop. Mirrors pose, captures MP4 frame, polls mission."""
+        period = 1.0 / self._viz_fps
+        while not self._stop_event.is_set():
+            loop_start = time.perf_counter()
+
+            with self._lock:
+                snapshot = self._slot
+
+            if snapshot is not None:
+                self._mirror_pose(snapshot)
+                p.stepSimulation(physicsClientId=self._gui_client)
+                self._video_frame_count += 1
+                self._handle_mp4_lifecycle(snapshot)
+                self._prev_mission_state = snapshot.mission_state
+
+            elapsed = time.perf_counter() - loop_start
+            remaining = period - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+    def _mirror_pose(self, snapshot: PoseSnapshot) -> None:
+        """Apply snapshot to GUI robot; update DebugVisualizer if present."""
+        try:
+            p.resetBasePositionAndOrientation(
+                self._gui_robot_id,
+                snapshot.base_pos,
+                snapshot.base_orn,
+                physicsClientId=self._gui_client,
+            )
+            for jname, jid in self._joint_list:
+                pos, vel = snapshot.joint_states.get(jname, (0.0, 0.0))
+                p.resetJointState(
+                    self._gui_robot_id, jid, pos, vel,
+                    physicsClientId=self._gui_client,
+                )
+            if self._visualizer is not None:
+                lp = snapshot.link_positions
+                left_hip  = tuple(lp.get(self._left_hip_link,  [0.0, 0.0, 0.0]))
+                right_hip = tuple(lp.get(self._right_hip_link, [0.0, 0.0, 0.0]))
+                self._visualizer.update(shared_state, left_hip, right_hip)
+        except Exception:
+            pass  # GUI mirror is non-critical
 
     # ------------------------------------------------------------------ #
     def _handle_mp4_lifecycle(self, snapshot: PoseSnapshot) -> None:
@@ -555,6 +628,8 @@ class Siclo1Controller:
         self.use_gui = use_gui
         self.viz_decimation: int = viz_decimation  # cycles between GUI renders
         self._visualizer = None                    # set after warmup if GUI mode
+        self._gui_sync_thread: Optional[GUISyncThread] = None  # set after GUI load
+        self._walk_active: bool = (walk_distance is not None)
 
         # 1. Physics client — ALWAYS headless
         self.physics_client = p.connect(p.DIRECT)
@@ -673,6 +748,21 @@ class Siclo1Controller:
         if self.gui_client is not None:
             from viz.debug_markers import DebugVisualizer
             self._visualizer = DebugVisualizer(self.gui_client)
+
+        # 11. GUISyncThread — owns GUI rendering and MP4 recording
+        if self.gui_client is not None and self._gui_robot_id >= 0:
+            self._gui_sync_thread = GUISyncThread(
+                gui_client=self.gui_client,
+                gui_robot_id=self._gui_robot_id,
+                joint_list=self.pybullet._joint_list,
+                session_path=self._telemetry_thread.session_path,
+                viz_fps=30,
+                walk_active=self._walk_active,
+                visualizer=self._visualizer,
+                left_hip_link=self._left_hip_link,
+                right_hip_link=self._right_hip_link,
+            )
+            self._gui_sync_thread.start()
 
     # ------------------------------------------------------------------ #
     def _wbc_step(self) -> None:
@@ -822,11 +912,42 @@ class Siclo1Controller:
         shared_state.telemetry.write(row)
 
         # 18. Optional GUI sync (decimated — every viz_decimation cycles)
-        if (self.gui_client is not None and
+        if (self._gui_sync_thread is not None and
                 shared_state.cycle_count % self.viz_decimation == 0):
-            self._sync_gui()
+            self._push_gui_snapshot()
 
         return True
+
+    # ------------------------------------------------------------------ #
+    def _push_gui_snapshot(self) -> None:
+        """Build a PoseSnapshot from current physics state and push to GUISyncThread.
+
+        Called every viz_decimation cycles from step().  Non-critical — any
+        exception is suppressed so the 100 Hz loop is never interrupted.
+        """
+        if self._gui_sync_thread is None or self._gui_robot_id < 0:
+            return
+        try:
+            pos, orn = p.getBasePositionAndOrientation(
+                self.pybullet.robot_id, physicsClientId=self.physics_client)
+            joint_states = {
+                jname: (
+                    shared_state.joint_positions.get(jname, 0.0),
+                    shared_state.joint_velocities.get(jname, 0.0),
+                )
+                for jname, _ in self.pybullet._joint_list
+            }
+            snap = PoseSnapshot(
+                base_pos=pos,
+                base_orn=orn,
+                joint_states=joint_states,
+                link_positions=dict(shared_state.link_positions),
+                mission_state=shared_state.mission_state,
+                emergency_stop=shared_state.emergency_stop_triggered,
+            )
+            self._gui_sync_thread.push_pose(snap)
+        except Exception:
+            pass  # GUI sync is non-critical
 
     # ------------------------------------------------------------------ #
     def _sync_gui(self) -> None:
@@ -929,9 +1050,25 @@ class Siclo1Controller:
 
     # ------------------------------------------------------------------ #
     def shutdown(self) -> None:
+        # Step 1: stop GUI sync thread and wait for MP4 flush BEFORE disconnect.
+        # p.disconnect() invalidates the C++ encoder handle — join first or the
+        # file is silently truncated.
+        if self._gui_sync_thread is not None and self._gui_sync_thread.is_alive():
+            meta = self._gui_sync_thread.stop()
+            self._gui_sync_thread.join(timeout=5.0)  # 5 s: allow encoder flush
+            if self._gui_sync_thread.is_alive():
+                print("[WARN] GUISyncThread did not exit within 5 s — "
+                      "walk.mp4 may be truncated")
+            elif meta.get('video_path') and not os.path.isfile(meta['video_path']):
+                print(f"[WARN] walk.mp4 expected at {meta['video_path']} "
+                      "but file not found after flush")
+
+        # Step 2: stop telemetry thread.
         if self._telemetry_thread.is_alive():
             self._telemetry_thread.stop()
             self._telemetry_thread.join(timeout=2.0)
+
+        # Step 3: disconnect physics clients — safe now that threads are done.
         try:
             p.disconnect(physicsClientId=self.physics_client)
         except Exception:
