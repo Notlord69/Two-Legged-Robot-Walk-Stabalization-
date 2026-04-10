@@ -272,7 +272,7 @@ class Siclo1State:
         # Capture Point — LIPM extrapolated COM (X-Y world frame, metres).
         # Written by stability.py every 100 Hz cycle; read by gait_planner.py
         # for foot target placement.
-        self.capture_point: np.ndarray = np.zeros(2)
+        self.capture_point: np.ndarray = np.zeros(2)  # m, X-Y world frame
 
         # Per-leg foot targets (m, world frame).
         # Written by gait planner; read by DebugVisualizer.
