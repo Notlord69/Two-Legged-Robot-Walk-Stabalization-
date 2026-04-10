@@ -269,6 +269,11 @@ class Siclo1State:
         # Feedforward torso pitch correction from angular momentum (rad).
         self.torso_pitch_correction: float = 0.0  # rad, applied to torso pitch joint
 
+        # Capture Point — LIPM extrapolated COM (X-Y world frame, metres).
+        # Written by stability.py every 100 Hz cycle; read by gait_planner.py
+        # for foot target placement.
+        self.capture_point: np.ndarray = np.zeros(2)
+
         # Per-leg foot targets (m, world frame).
         # Written by gait planner; read by DebugVisualizer.
         # Default (0,0,0) = no active target; visualiser skips red line.
@@ -440,6 +445,7 @@ class Siclo1State:
             'right_force':       self.right_foot_force,
             'left_slip':         self.left_foot_slip_detected,
             'right_slip':        self.right_foot_slip_detected,
+            'capture_point':     self.capture_point.tolist(),
             'recovery_action':   self.recovery_action.name,
             'recovery_active':   self.recovery_active,
             'recovery_reason':   self.recovery_reason,
@@ -485,6 +491,7 @@ class Siclo1State:
             self.right_foot_flat     = False
             self.left_foot_pitch     = 0.0
             self.right_foot_pitch    = 0.0
+            self.capture_point = np.zeros(2)
             self.left_contact_points.clear()
             self.right_contact_points.clear()
             self.recovery_action  = RecoveryAction.NONE

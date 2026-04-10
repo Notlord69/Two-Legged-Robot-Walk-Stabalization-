@@ -33,3 +33,22 @@ def test_grf_torque_correction_is_dict():
 def test_ramp_gain_bounds():
     s = Siclo1State()
     assert 0.0 <= s.ramp_gain <= 1.0
+
+
+def test_capture_point_field_exists_with_default():
+    """capture_point initialises to 2D zero vector."""
+    s = Siclo1State()
+    assert hasattr(s, 'capture_point')
+    assert s.capture_point.shape == (2,)
+    assert s.capture_point[0] == 0.0
+    assert s.capture_point[1] == 0.0
+
+
+def test_capture_point_resets_to_zero():
+    """reset() restores capture_point to zeros."""
+    import numpy as np
+    s = Siclo1State()
+    s.capture_point = np.array([1.5, -0.3])
+    s.reset()
+    assert s.capture_point[0] == 0.0
+    assert s.capture_point[1] == 0.0
