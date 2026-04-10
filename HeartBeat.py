@@ -348,12 +348,14 @@ class PyBulletInterface:
                     ss.left_foot_position = pos
                     ss.left_foot_velocity = vel
                     ss.left_foot_force = force
+                    # Pitch is kinematic — computed unconditionally, not gated on force
+                    qx, qy, qz, qw = link_state[1]
+                    foot_pitch = math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx))))
+                    ss.left_foot_pitch = foot_pitch
                     if force > threshold:
                         ss.left_contact_ticks += 1
-                        # Flat Foot: X-spread of contact points > 1cm (more realistic for Siclo1)
                         pts_x = [c[5][0] for c in contacts]
-                        ss.left_foot_flat = (max(pts_x) - min(pts_x)) > 0.01 if len(pts_x) > 1 else False
-                        # Store all contact point positions
+                        ss.left_foot_flat = _compute_foot_flat(pts_x, foot_pitch)
                         ss.left_contact_points = [np.array(c[5]) for c in contacts]
                     else:
                         ss.left_contact_ticks = 0
@@ -363,12 +365,14 @@ class PyBulletInterface:
                     ss.right_foot_position = pos
                     ss.right_foot_velocity = vel
                     ss.right_foot_force = force
+                    # Pitch is kinematic — computed unconditionally, not gated on force
+                    qx, qy, qz, qw = link_state[1]
+                    foot_pitch = math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx))))
+                    ss.right_foot_pitch = foot_pitch
                     if force > threshold:
                         ss.right_contact_ticks += 1
                         pts_x = [c[5][0] for c in contacts]
-                        # Reduced threshold to 1cm spread
-                        ss.right_foot_flat = (max(pts_x) - min(pts_x)) > 0.01 if len(pts_x) > 1 else False
-                        # Store all contact point positions
+                        ss.right_foot_flat = _compute_foot_flat(pts_x, foot_pitch)
                         ss.right_contact_points = [np.array(c[5]) for c in contacts]
                     else:
                         ss.right_contact_ticks = 0
