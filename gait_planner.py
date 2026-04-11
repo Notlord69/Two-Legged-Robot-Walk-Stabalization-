@@ -3,34 +3,34 @@
 PROJECT SICLO1 — GAIT PLANNER  (gait_planner.py)
 ================================================================================
 
-Compute Capture-Point-adjusted foot targets, run the parabolic swing arc,
-and call kinematics.solve_ik() to produce joint angle targets.
-
-Foot target (at toe-off):
-    x_target = capture_point_x * STEP_TIMING_SCALE + STEP_LENGTH
-    (STEP_LENGTH halved in DECEL state to absorb stopping)
-
-Swing trajectory (parabolic arc):
-    z_swing = SWING_HEIGHT * 4 * φ * (1 - φ)    # peaks at φ=0.5
-    x_swing = x_stance + (x_target - x_stance) * φ
+5-State Step-Phase FSM:
+    DOUBLE_SUPPORT → COM_SHIFT → LIFT → SWING → PLACE → DOUBLE_SUPPORT
 
 Phase advance per cycle:
-    shared_state.swing_phase += dt / SWING_DURATION
+    step_phase_timer += dt on every cycle.
+    Each phase handler checks exit conditions and calls _transition_to().
 
-At φ ≥ 1.0: foot placed, step_count++, active_swing_side flips, phase resets.
+Stance IK anchor (all phases, every cycle, stance leg only in LIFT/SWING/PLACE):
+    stance_foot_rel = stance_foot_world_pos - stance_hip_pos
+    ik_stance_angles = kinematics.solve_ik(stance_foot_rel, stance_side)
 
-IK call (no modifications to kinematics.py):
-    foot_xyz_rel = (x_swing - hip_x, 0.0, z_swing - hip_z)
-    angles = kinematics.solve_ik(foot_xyz_rel, side)
+Swing arc (SWING and PLACE phases only):
+    z_swing = SWING_HEIGHT * 4 * φ * (1 - φ)
+    x_swing = x_stance + (x_target - x_stance) * φ
 
 INPUTS (shared_state):
-    com_position, com_velocity, capture_point, swing_phase, swing_foot_x_stance,
-    left/right_foot_position, active_swing_side, mission_state, ramp_gain,
-    freeze_robot, link_positions, last_dt
+    step_phase, step_phase_timer, stance_side, stance_foot_world_pos,
+    capture_point, swing_phase, swing_foot_x_stance,
+    left/right_foot_{position,velocity,force,contact_state},
+    stability_status, mission_state, ramp_gain, freeze_robot, link_positions,
+    last_dt
 
 OUTPUTS (shared_state):
-    swing_phase, swing_foot_x_stance, swing_foot_target, left/right_foot_target,
-    ik_left_angles, ik_right_angles, step_count, active_swing_side
+    step_phase, step_phase_timer, swing_phase, swing_foot_x_stance,
+    swing_foot_target, left/right_foot_target,
+    ik_left_angles, ik_right_angles,
+    step_count, active_swing_side, stance_side,
+    stance_foot_world_pos, freeze_robot
 
 Author: Siclo1 Project Team
 Date: April 2026
@@ -40,8 +40,11 @@ Date: April 2026
 import numpy as np
 
 import kinematics
-import recovery   # reset_step() called at touchdown to restart step-duration watchdog
-from shared_state import shared_state, MissionState
+import recovery
+from shared_state import (
+    shared_state, MissionState, StepPhase, ContactState, StabilityStatus,
+    ERR_PHASE_TIMEOUT,
+)
 
 
 # ============================================================================
@@ -53,6 +56,20 @@ STEP_TIMING_SCALE: float = 0.5    # dimensionless, blend factor for CP correctio
 
 SWING_HEIGHT:   float = 0.04   # m, peak foot clearance above ground at φ=0.5
 SWING_DURATION: float = 0.40   # s, full swing phase (40 cycles at 100 Hz)
+
+# Phase timeout constants
+DS_MIN_TIME:           float = 0.10   # s, minimum double-support duration
+DS_TIMEOUT:            float = 2.0    # s, DS timeout → freeze_robot
+COM_SHIFT_TIMEOUT:     float = 1.0    # s, COM_SHIFT timeout → conditional
+COM_SHIFT_THRESHOLD:   float = 0.03   # m, |CP_x − stance_foot_x| to exit COM_SHIFT
+LIFT_TIMEOUT:          float = 0.15   # s, LIFT timeout → conditional
+SWING_TIMEOUT_FACTOR:  float = 1.5    # ×SWING_DURATION before force-advance to PLACE
+PLACE_TIMEOUT:         float = 0.5    # s, PLACE timeout → conditional
+
+# Physical thresholds
+UNLOAD_FORCE_THRESHOLD: float = 5.0    # N, foot considered unloaded below this
+SETTLE_VEL_THRESHOLD:   float = 0.05   # m/s, foot considered settled below this
+PLACE_ENTRY_PHI:        float = 0.85   # dimensionless, phi at which SWING → PLACE
 
 # Hip link names in shared_state.link_positions (verified HeartBeat.py 2026-04-05)
 _LEFT_HIP_LINK:  str = "Left_Upper_Leg_1"
@@ -75,7 +92,7 @@ def _swing_z(phi: float) -> float:
 def _compute_x_target(capture_point_x: float, decel: bool = False) -> float:
     """Compute foot landing x-position from Capture Point.
 
-    capture_point_x: x-component of CP in world frame (m)
+    capture_point_x: x-component of CP in world frame (m), pre-clamped
     decel: True in DECEL state → halve STEP_LENGTH to absorb stopping impulse
     Returns target x (m, world frame).
     """
@@ -83,16 +100,30 @@ def _compute_x_target(capture_point_x: float, decel: bool = False) -> float:
     return capture_point_x * STEP_TIMING_SCALE + step
 
 
+def _clamped_cp_x() -> float:
+    """Read capture_point[0] from shared_state, clamped to ±0.20 m.
+
+    Clamped to prevent IK workspace violations during erratic motion.
+    ±0.20 m covers the full physically valid recovery range for this robot.
+    """
+    cp_x = float(getattr(shared_state, 'capture_point', np.zeros(2))[0])
+    return float(np.clip(cp_x, -0.20, 0.20))
+
+
 # ============================================================================
 # GAIT PLANNER CONTROLLER
 # ============================================================================
 
 class GaitPlannerController:
-    """Per-cycle gait planner. Reads/writes shared_state."""
+    """Per-cycle gait planner FSM.  All state lives in shared_state."""
+
+    def __init__(self):
+        self._ds_lock_pending: bool = True  # lock stance foot on first DS cycle
+
+    # ── Public entry point ────────────────────────────────────────────────────
 
     def update(self) -> None:
         """Called once per 100 Hz cycle by HeartBeat.py."""
-        # Safety / gate
         if (shared_state.freeze_robot or
                 shared_state.mission_state == MissionState.IDLE):
             return
@@ -101,68 +132,274 @@ class GaitPlannerController:
         if dt <= 0.0 or dt > 0.5:
             dt = 0.01   # fallback to 100 Hz nominal
 
-        # Which leg is swinging?
+        # Advance phase timer every cycle before dispatching
+        shared_state.step_phase_timer += dt
+
+        phase = shared_state.step_phase
+        if phase == StepPhase.DOUBLE_SUPPORT:
+            self._handle_double_support(dt)
+        elif phase == StepPhase.COM_SHIFT:
+            self._handle_com_shift(dt)
+        elif phase == StepPhase.LIFT:
+            self._handle_lift(dt)
+        elif phase == StepPhase.SWING:
+            self._handle_swing(dt)
+        elif phase == StepPhase.PLACE:
+            self._handle_place(dt)
+
+    # ── Transition helpers ────────────────────────────────────────────────────
+
+    def _transition_to(self, phase: StepPhase) -> None:
+        """Advance FSM to phase: reset timer, reset step watchdog."""
+        if phase == StepPhase.DOUBLE_SUPPORT:
+            self._ds_lock_pending = True
+        shared_state.step_phase       = phase
+        shared_state.step_phase_timer = 0.0
+        recovery.reset_step()
+
+    def _abort_to_double_support(self) -> None:
+        """Conditional timeout abort: preserve stance/swing sides, retry same step."""
+        shared_state.swing_phase = 0.0
+        self._transition_to(StepPhase.DOUBLE_SUPPORT)
+
+    # ── Stance IK anchor (used every cycle for stance leg) ───────────────────
+
+    def _compute_stance_ik(self) -> None:
+        """Recompute stance leg IK from locked world-frame anchor.
+
+        Runs every cycle in every phase for the stance leg.
+        Stance foot is never frozen — WBC always gets a valid target.
+        """
+        stance_side = shared_state.stance_side
+        hip_key = (_LEFT_HIP_LINK if stance_side == "left"
+                   else _RIGHT_HIP_LINK)
+        hip_pos = shared_state.link_positions.get(hip_key, np.zeros(3))
+        stance_foot_rel = shared_state.stance_foot_world_pos - hip_pos
+        rel_z = float(stance_foot_rel[2])
+        if not (-1.0 < rel_z < 0.0):
+            return   # invalid geometry (robot falling); hold last angles
+        foot_xyz_rel = (
+            float(stance_foot_rel[0]),
+            float(stance_foot_rel[1]),
+            rel_z,
+        )
+        try:
+            angles = kinematics.solve_ik(foot_xyz_rel, stance_side)
+        except ValueError:
+            angles = (0.0, 0.0, 0.0)
+        if stance_side == "left":
+            shared_state.ik_left_angles  = angles
+        else:
+            shared_state.ik_right_angles = angles
+
+    def _lock_stance_foot(self) -> None:
+        """Snapshot current stance foot world position into stance_foot_world_pos.
+
+        Called exactly once per stance entry (DOUBLE_SUPPORT entry).
+        """
+        stance_side = shared_state.stance_side
+        foot_pos = (shared_state.left_foot_position  if stance_side == "left"
+                    else shared_state.right_foot_position)
+        shared_state.stance_foot_world_pos = foot_pos.copy()
+
+    # ── Phase handlers ────────────────────────────────────────────────────────
+
+    def _handle_double_support(self, dt: float) -> None:
+        # Lock stance foot exactly once on DS entry
+        if self._ds_lock_pending:
+            self._lock_stance_foot()
+            self._ds_lock_pending = False
+
+        self._compute_stance_ik()
+
+        timer = shared_state.step_phase_timer
+        if timer >= DS_TIMEOUT:
+            shared_state.freeze_robot = True
+            return
+
+        both_confirmed = shared_state.both_feet_in_contact()
+        if both_confirmed and timer >= DS_MIN_TIME:
+            self._transition_to(StepPhase.COM_SHIFT)
+
+    def _handle_com_shift(self, dt: float) -> None:
+        self._compute_stance_ik()
+
+        timer     = shared_state.step_phase_timer
+        cp_x      = float(shared_state.capture_point[0])
+        stance_x  = float(shared_state.stance_foot_world_pos[0])
+        stable    = (shared_state.stability_status != StabilityStatus.UNSTABLE)
+        cp_close  = abs(cp_x - stance_x) < COM_SHIFT_THRESHOLD
+
+        if stable and cp_close:
+            self._transition_to(StepPhase.LIFT)
+            return
+
+        if timer >= COM_SHIFT_TIMEOUT:
+            swing_force = self._swing_foot_force()
+            if swing_force > UNLOAD_FORCE_THRESHOLD:
+                self._abort_to_double_support()
+            else:
+                self._transition_to(StepPhase.LIFT)
+
+    def _handle_lift(self, dt: float) -> None:
+        self._compute_stance_ik()
+
+        timer       = shared_state.step_phase_timer
+        swing_force = self._swing_foot_force()
+        swing_vel_z = abs(float(self._swing_foot_velocity()[2]))
+
+        if swing_force < UNLOAD_FORCE_THRESHOLD and swing_vel_z < SETTLE_VEL_THRESHOLD:
+            self._snapshot_swing_foot_x()
+            self._transition_to(StepPhase.SWING)
+            return
+
+        if timer >= LIFT_TIMEOUT:
+            if swing_force > UNLOAD_FORCE_THRESHOLD:
+                self._abort_to_double_support()
+            else:
+                self._snapshot_swing_foot_x()
+                self._transition_to(StepPhase.SWING)
+
+    def _handle_swing(self, dt: float) -> None:
+        self._compute_stance_ik()
+
         side    = shared_state.active_swing_side
         hip_key = _LEFT_HIP_LINK if side == "left" else _RIGHT_HIP_LINK
-
-        # Hip position in world frame
         hip_pos = shared_state.link_positions.get(hip_key, np.zeros(3))
         hip_x   = float(hip_pos[0])
         hip_z   = float(hip_pos[2])
 
-        # Foot stance position (position at toe-off, stored when swing starts)
-        # At phase == 0.0 (swing start), snapshot current swing foot position
-        phi = shared_state.swing_phase
-        if phi == 0.0:
-            foot_pos = (shared_state.left_foot_position
-                        if side == "left"
-                        else shared_state.right_foot_position)
-            shared_state.swing_foot_x_stance = float(foot_pos[0])
-
-        x_stance = shared_state.swing_foot_x_stance
-
-        # Compute foot target (at toe-off, captured once per swing cycle)
-        # For simplicity, recompute each cycle — CP may update mid-swing
-        cp_x = float(getattr(shared_state, 'capture_point', np.zeros(2))[0])
-        decel = (shared_state.mission_state == MissionState.DECEL)
-        x_target = _compute_x_target(cp_x, decel=decel)
+        # Compute foot target — CP may update mid-swing
+        x_target = _compute_x_target(
+            _clamped_cp_x(),
+            decel=(shared_state.mission_state == MissionState.DECEL),
+        )
         shared_state.swing_foot_target = (x_target, 0.0, 0.0)
-
         if side == "left":
             shared_state.left_foot_target  = (x_target, 0.0, 0.0)
         else:
             shared_state.right_foot_target = (x_target, 0.0, 0.0)
 
-        # Advance swing phase
-        phi += dt / SWING_DURATION
+        # Advance phi
+        phi = shared_state.swing_phase + dt / SWING_DURATION
         shared_state.swing_phase = phi
 
-        # Compute swing foot position along arc
-        phi_clamped = min(phi, 1.0)
-        x_swing     = x_stance + (x_target - x_stance) * phi_clamped
-        z_swing     = _swing_z(phi_clamped)
+        # Swing arc IK
+        self._compute_swing_ik(side, hip_x, hip_z, phi, x_target)
 
-        # IK: foot position relative to hip-pitch joint
-        foot_xyz_rel = (x_swing - hip_x, 0.0, z_swing - hip_z)
+        # Exit: phi reaches PLACE_ENTRY_PHI
+        if phi >= PLACE_ENTRY_PHI:
+            self._transition_to(StepPhase.PLACE)
+            return
+
+        # Timeout: force advance to PLACE, log error code
+        if shared_state.step_phase_timer >= SWING_DURATION * SWING_TIMEOUT_FACTOR:
+            shared_state.add_error_code(ERR_PHASE_TIMEOUT)
+            self._transition_to(StepPhase.PLACE)
+
+    def _handle_place(self, dt: float) -> None:
+        self._compute_stance_ik()
+
+        side    = shared_state.active_swing_side
+        hip_key = _LEFT_HIP_LINK if side == "left" else _RIGHT_HIP_LINK
+        hip_pos = shared_state.link_positions.get(hip_key, np.zeros(3))
+        hip_x   = float(hip_pos[0])
+        hip_z   = float(hip_pos[2])
+
+        # phi continues to 1.0 then clamps
+        phi = min(shared_state.swing_phase + dt / SWING_DURATION, 1.0)
+        shared_state.swing_phase = phi
+
+        x_target = _compute_x_target(
+            _clamped_cp_x(),
+            decel=(shared_state.mission_state == MissionState.DECEL),
+        )
+        self._compute_swing_ik(side, hip_x, hip_z, phi, x_target)
+
+        # Exit: contact confirmed + velocity settled
+        swing_contact = self._swing_foot_contact()
+        swing_vel_z   = abs(float(self._swing_foot_velocity()[2]))
+
+        if (swing_contact == ContactState.CONTACT_CONFIRMED and
+                swing_vel_z < SETTLE_VEL_THRESHOLD):
+            self._complete_step()
+            return
+
+        # Timeout: route by force
+        if shared_state.step_phase_timer >= PLACE_TIMEOUT:
+            if self._swing_foot_force() > UNLOAD_FORCE_THRESHOLD:
+                # Sensor lagged — contact happened; complete step
+                self._complete_step()
+            else:
+                # Foot missed ground — unsafe; freeze
+                shared_state.freeze_robot = True
+
+    # ── Swing IK helper ───────────────────────────────────────────────────────
+
+    def _compute_swing_ik(
+        self, side: str, hip_x: float, hip_z: float,
+        phi: float, x_target: float,
+    ) -> None:
+        """Compute swing leg IK from parabolic arc and write to shared_state."""
+        phi_c   = min(phi, 1.0)
+        x_swing = shared_state.swing_foot_x_stance + (x_target - shared_state.swing_foot_x_stance) * phi_c
+        z_swing = _swing_z(phi_c)
+        rel_z   = z_swing - hip_z
+        if not (-1.0 < rel_z < 0.0):
+            return   # invalid geometry; hold last angles
+        foot_xyz_rel = (x_swing - hip_x, 0.0, rel_z)
         try:
             angles = kinematics.solve_ik(foot_xyz_rel, side)
         except ValueError:
             angles = (0.0, 0.0, 0.0)
-
         if side == "left":
             shared_state.ik_left_angles  = angles
         else:
             shared_state.ik_right_angles = angles
 
-        # Step completion: φ ≥ 1.0
-        if phi >= 1.0:
-            shared_state.step_count    += 1
-            shared_state.swing_phase    = 0.0
-            # Flip swing side
-            shared_state.active_swing_side = (
-                "right" if side == "left" else "left"
-            )
-            recovery.reset_step()  # restart step-duration watchdog: current_step_start_time = sim_time
+    # ── Step completion ───────────────────────────────────────────────────────
+
+    def _complete_step(self) -> None:
+        """Clean PLACE → DOUBLE_SUPPORT: flip sides, increment step_count, lock anchor."""
+        old_swing   = shared_state.active_swing_side
+        new_stance  = old_swing
+        new_swing   = "right" if old_swing == "left" else "left"
+
+        shared_state.active_swing_side = new_swing
+        shared_state.stance_side       = new_stance
+        shared_state.step_count       += 1
+        shared_state.swing_phase       = 0.0
+
+        # Lock the newly landed foot as the stance anchor for the next step
+        foot_pos = (shared_state.left_foot_position  if new_stance == "left"
+                    else shared_state.right_foot_position)
+        shared_state.stance_foot_world_pos = foot_pos.copy()
+
+        self._transition_to(StepPhase.DOUBLE_SUPPORT)
+
+    # ── Convenience accessors for swing-leg sensors ───────────────────────────
+
+    def _swing_foot_force(self) -> float:
+        side = shared_state.active_swing_side
+        return float(shared_state.left_foot_force  if side == "left"
+                     else shared_state.right_foot_force)
+
+    def _swing_foot_velocity(self) -> np.ndarray:
+        side = shared_state.active_swing_side
+        return (shared_state.left_foot_velocity  if side == "left"
+                else shared_state.right_foot_velocity)
+
+    def _swing_foot_contact(self) -> ContactState:
+        side = shared_state.active_swing_side
+        return (shared_state.left_foot_contact_state  if side == "left"
+                else shared_state.right_foot_contact_state)
+
+    def _snapshot_swing_foot_x(self) -> None:
+        """Snapshot swing foot x at COM_SHIFT exit.  Written exactly once per step."""
+        side = shared_state.active_swing_side
+        foot_pos = (shared_state.left_foot_position  if side == "left"
+                    else shared_state.right_foot_position)
+        shared_state.swing_foot_x_stance = float(foot_pos[0])
 
 
 _gait_planner = GaitPlannerController()
