@@ -41,9 +41,15 @@ from shared_state import (
     shared_state,
     ContactState,
     MissionState,
+    StepPhase,
     URDF_JOINT_LIMITS,
     DEFAULT_LINK_DATA,
 )
+
+# Phases where only the stance leg receives GRF.  During LIFT/SWING/PLACE the
+# swing-foot contact sensor may still read CONTACT_CONFIRMED due to sensor lag;
+# we suppress GRF on the swing leg regardless of sensor state.
+_STANCE_ONLY_PHASES = {StepPhase.LIFT, StepPhase.SWING, StepPhase.PLACE}
 
 
 # ============================================================================
@@ -177,10 +183,19 @@ class GRFController:
                     else K_SPRING)
 
         jp = shared_state.joint_positions
+
+        # Phase-aware eligibility: during LIFT/SWING/PLACE the swing leg is
+        # suppressed even if its contact sensor still reads CONTACT_CONFIRMED.
+        step_phase  = shared_state.step_phase
+        stance_side = shared_state.stance_side
+        left_eligible  = (step_phase not in _STANCE_ONLY_PHASES or stance_side == "left")
+        right_eligible = (step_phase not in _STANCE_ONLY_PHASES or stance_side == "right")
+
         result: Dict[str, float] = {}
 
         # ── Left leg — axis = -X → urdf_sign = -1.0 ─────────────────────────
-        if shared_state.left_foot_contact_state == ContactState.CONTACT_CONFIRMED:
+        if (left_eligible and
+                shared_state.left_foot_contact_state == ContactState.CONTACT_CONFIRMED):
             result.update(_compute_leg_correction(
                 z_foot      = float(shared_state.left_foot_position[2]),
                 z_dot_foot  = float(shared_state.left_foot_velocity[2]),
@@ -197,7 +212,8 @@ class GRFController:
             result['Left_Knee']         = 0.0
 
         # ── Right leg — axis = +X → urdf_sign = +1.0 ────────────────────────
-        if shared_state.right_foot_contact_state == ContactState.CONTACT_CONFIRMED:
+        if (right_eligible and
+                shared_state.right_foot_contact_state == ContactState.CONTACT_CONFIRMED):
             result.update(_compute_leg_correction(
                 z_foot      = float(shared_state.right_foot_position[2]),
                 z_dot_foot  = float(shared_state.right_foot_velocity[2]),
