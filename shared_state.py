@@ -38,6 +38,7 @@ ERR_MID_CYCLE_OVERRUN = 2
 ERR_UNSAFE_IMPACT     = 3
 ERR_SLIP_FORCE_DROP   = 4
 ERR_SLIP_LATERAL_VEL  = 5
+ERR_PHASE_TIMEOUT     = 6   # step-phase timeout fired (hot-path safe, no string)
 
 
 # ============================================================================
@@ -130,6 +131,16 @@ class MissionState(Enum):
     WALK  = auto()
     DECEL = auto()
     STOP  = auto()
+
+
+class StepPhase(Enum):
+    """Five-phase step FSM state.  Owned exclusively by gait_planner.py.
+    All other modules read this field; only gait_planner writes it."""
+    DOUBLE_SUPPORT = auto()   # both feet grounded — stabilise before swing
+    COM_SHIFT      = auto()   # shift COM over stance foot
+    LIFT           = auto()   # unload and lift swing foot
+    SWING          = auto()   # phi-arc swing; only phase where phi advances
+    PLACE          = auto()   # drive swing foot to ground; await contact
 
 
 # ============================================================================
@@ -315,6 +326,23 @@ class Siclo1State:
         # Torque scale factor ∈ [0, 1]. Ramped up by RAMP state, down by STOP state.
         # Written by mission.py; read by grf.py and gait_planner.py.
         self.ramp_gain: float = 0.0
+
+        # Current step FSM phase.  Written by gait_planner.py exclusively.
+        # All other modules read this to gate behaviour per phase.
+        self.step_phase: StepPhase = StepPhase.DOUBLE_SUPPORT
+
+        # Seconds elapsed in the current step phase.  Reset to 0.0 on every
+        # phase transition.  Written by gait_planner.py.
+        self.step_phase_timer: float = 0.0
+
+        # Foot currently bearing weight — complement of active_swing_side.
+        # "right" at spawn because active_swing_side defaults to "left".
+        self.stance_side: str = "right"
+
+        # Stance foot world-frame position locked once at DOUBLE_SUPPORT entry.
+        # Used as IK anchor for all stance-leg computations in every phase.
+        # Written by gait_planner.py exactly once per stance entry.
+        self.stance_foot_world_pos: np.ndarray = np.zeros(3)
 
         # ====================================================================
         # SYSTEM HEALTH
