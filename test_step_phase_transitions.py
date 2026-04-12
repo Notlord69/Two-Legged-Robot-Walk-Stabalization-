@@ -11,8 +11,9 @@ import gait_planner
 
 def _reset():
     """Return shared_state to a clean walking configuration."""
-    shared_state.freeze_robot              = False
-    shared_state.emergency_stop_triggered  = False
+    shared_state.freeze_robot                    = False
+    shared_state.timing_violation_this_cycle     = False
+    shared_state.emergency_stop_triggered        = False
     shared_state.mission_state             = MissionState.WALK
     shared_state.ramp_gain                 = 1.0
     shared_state.last_dt                   = 0.01
@@ -116,9 +117,10 @@ def test_com_shift_timer_resets_on_transition_to_lift():
 
 def test_lift_advances_to_swing_when_unloaded_and_settled():
     _reset()
-    shared_state.step_phase              = StepPhase.LIFT
-    shared_state.left_foot_force         = 2.0    # < UNLOAD_FORCE_THRESHOLD=5.0
-    shared_state.left_foot_velocity      = np.array([0.0, 0.0, 0.01])  # < 0.05 m/s
+    shared_state.step_phase          = StepPhase.LIFT
+    shared_state.left_foot_force     = 2.0    # N, < SWING_UNLOAD_THRESHOLD=5 N
+    shared_state.right_foot_force    = 65.0   # N, > STANCE_LOAD_THRESHOLD=60 N
+    shared_state.left_foot_velocity  = np.array([0.0, 0.0, 0.01])  # < 0.05 m/s
     gait_planner.update_gait_planner()
     assert shared_state.step_phase == StepPhase.SWING
 
@@ -145,9 +147,57 @@ def test_lift_snapshots_swing_foot_x_stance_on_transition():
     _reset()
     shared_state.step_phase          = StepPhase.LIFT
     shared_state.left_foot_position  = np.array([0.05, 0.0, 0.0])
-    shared_state.left_foot_force     = 2.0
+    shared_state.left_foot_force     = 2.0    # N, < SWING_UNLOAD_THRESHOLD=5 N
+    shared_state.right_foot_force    = 65.0   # N, > STANCE_LOAD_THRESHOLD=60 N
     shared_state.left_foot_velocity  = np.array([0.0, 0.0, 0.01])
     gait_planner.update_gait_planner()
     assert shared_state.swing_phase == 0.0
     # x_stance snapped from left_foot_position[0] at transition
     assert abs(shared_state.swing_foot_x_stance - 0.05) < 1e-9
+
+
+# ── Fix 4: soft ramp gate ─────────────────────────────────────────────────────
+
+def test_ds_blocked_when_ramp_gain_below_one():
+    """DS must not advance to COM_SHIFT while torque is still ramping up."""
+    _reset()
+    shared_state.step_phase_timer = 0.5    # s, well past DS_MIN_TIME=0.10
+    shared_state.ramp_gain        = 0.7    # dimensionless — still in RAMP
+    gait_planner.update_gait_planner()
+    assert shared_state.step_phase == StepPhase.DOUBLE_SUPPORT
+
+
+# ── Fix 3: force balance gate ─────────────────────────────────────────────────
+
+def test_ds_blocked_when_force_imbalanced():
+    """DS must not advance when one foot carries > 2× the other's force."""
+    _reset()
+    shared_state.step_phase_timer = 0.5
+    shared_state.left_foot_force  = 15.0   # N — ratio = 60/15 = 4× > 2×
+    shared_state.right_foot_force = 60.0   # N
+    gait_planner.update_gait_planner()
+    assert shared_state.step_phase == StepPhase.DOUBLE_SUPPORT
+
+
+def test_ds_blocked_when_force_below_floor():
+    """DS must not advance when both feet are nearly unloaded (ratio passes but floor fails)."""
+    _reset()
+    shared_state.step_phase_timer = 0.5
+    shared_state.left_foot_force  = 2.0    # N — below FORCE_BALANCE_FLOOR=10 N
+    shared_state.right_foot_force = 2.0    # N
+    gait_planner.update_gait_planner()
+    assert shared_state.step_phase == StepPhase.DOUBLE_SUPPORT
+
+
+# ── Fix 2: 2-D Euclidean COM_SHIFT exit ──────────────────────────────────────
+
+def test_com_shift_blocked_when_cp_offset_laterally():
+    """COM_SHIFT must not exit when CP is close in X but far in Y."""
+    _reset()
+    shared_state.step_phase            = StepPhase.COM_SHIFT
+    shared_state.stability_status      = StabilityStatus.STABLE
+    shared_state.stance_foot_world_pos = np.array([0.10, 0.0, 0.0])
+    # CP at same X as stance foot but 0.10 m off in Y → 2D dist=0.10 > threshold=0.03
+    shared_state.capture_point         = np.array([0.10, 0.10])
+    gait_planner.update_gait_planner()
+    assert shared_state.step_phase == StepPhase.COM_SHIFT

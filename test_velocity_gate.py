@@ -9,8 +9,9 @@ import gait_planner
 
 
 def _reset():
-    shared_state.freeze_robot              = False
-    shared_state.mission_state             = MissionState.WALK
+    shared_state.freeze_robot                = False
+    shared_state.timing_violation_this_cycle = False
+    shared_state.mission_state               = MissionState.WALK
     shared_state.ramp_gain                 = 1.0
     shared_state.last_dt                   = 0.01
     shared_state.step_phase_timer          = 0.0
@@ -40,7 +41,7 @@ def test_lift_exit_blocked_by_high_velocity():
     """LIFT: force low but velocity high → must stay in LIFT."""
     _reset()
     shared_state.step_phase           = StepPhase.LIFT
-    shared_state.left_foot_force      = 2.0    # < UNLOAD_FORCE_THRESHOLD
+    shared_state.left_foot_force      = 2.0    # N, < SWING_UNLOAD_THRESHOLD=5 N
     shared_state.left_foot_velocity   = np.array([0.0, 0.0, 0.30])  # > 0.05 m/s
     gait_planner.update_gait_planner()
     assert shared_state.step_phase == StepPhase.LIFT
@@ -49,7 +50,8 @@ def test_lift_exit_blocked_by_high_velocity():
 def test_lift_exit_allowed_when_both_conditions_met():
     _reset()
     shared_state.step_phase           = StepPhase.LIFT
-    shared_state.left_foot_force      = 2.0
+    shared_state.left_foot_force      = 2.0    # N, < SWING_UNLOAD_THRESHOLD=5 N
+    shared_state.right_foot_force     = 65.0   # N, > STANCE_LOAD_THRESHOLD=60 N
     shared_state.left_foot_velocity   = np.array([0.0, 0.0, 0.02])  # < 0.05
     gait_planner.update_gait_planner()
     assert shared_state.step_phase == StepPhase.SWING

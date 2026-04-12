@@ -67,7 +67,11 @@ SWING_TIMEOUT_FACTOR:  float = 1.5    # ×SWING_DURATION before force-advance to
 PLACE_TIMEOUT:         float = 0.5    # s, PLACE timeout → conditional
 
 # Physical thresholds
-UNLOAD_FORCE_THRESHOLD: float = 5.0    # N, foot considered unloaded below this
+SWING_UNLOAD_THRESHOLD: float = 5.0    # N, swing foot considered empty below this
+STANCE_LOAD_THRESHOLD:  float = 60.0   # N, ~77% of 78 N body weight; stance must carry
+                                        #    this before LIFT is permitted
+FORCE_BALANCE_RATIO:    float = 2.0    # dimensionless, max allowed ratio max(F)/min(F) at DS→COM_SHIFT
+FORCE_BALANCE_FLOOR:    float = 10.0   # N, minimum per-foot force before ratio check applies
 SETTLE_VEL_THRESHOLD:   float = 0.05   # m/s, foot considered settled below this
 PLACE_ENTRY_PHI:        float = 0.85   # dimensionless, phi at which SWING → PLACE
 
@@ -126,6 +130,13 @@ class GaitPlannerController:
         """Called once per 100 Hz cycle by HeartBeat.py."""
         if (shared_state.freeze_robot or
                 shared_state.mission_state == MissionState.IDLE):
+            return
+
+        # Mid-cycle overrun guard: if the prior stages (sensors, stability) already
+        # exceeded the 10 ms budget, the sensor data for this cycle is from an
+        # unusually long frame.  Hold the current phase and IK angles rather than
+        # advancing on potentially stale data.
+        if shared_state.timing_violation_this_cycle:
             return
 
         dt = shared_state.last_dt
@@ -217,18 +228,27 @@ class GaitPlannerController:
             shared_state.freeze_robot = True
             return
 
+        # Fix 4: soft ramp gate — DS timer counts during RAMP but no advance until full torque
+        if shared_state.ramp_gain < 1.0:
+            return
+
         both_confirmed = shared_state.both_feet_in_contact()
         if both_confirmed and timer >= DS_MIN_TIME:
-            self._transition_to(StepPhase.COM_SHIFT)
+            # Fix 3: force balance gate — neither foot carrying > FORCE_BALANCE_RATIO× the other
+            lf = shared_state.left_foot_force
+            rf = shared_state.right_foot_force
+            if (lf >= FORCE_BALANCE_FLOOR and rf >= FORCE_BALANCE_FLOOR and
+                    max(lf, rf) / min(lf, rf) <= FORCE_BALANCE_RATIO):
+                self._transition_to(StepPhase.COM_SHIFT)
 
     def _handle_com_shift(self, dt: float) -> None:
         self._compute_stance_ik()
 
-        timer     = shared_state.step_phase_timer
-        cp_x      = float(shared_state.capture_point[0])
-        stance_x  = float(shared_state.stance_foot_world_pos[0])
-        stable    = (shared_state.stability_status != StabilityStatus.UNSTABLE)
-        cp_close  = abs(cp_x - stance_x) < COM_SHIFT_THRESHOLD
+        timer    = shared_state.step_phase_timer
+        stable   = (shared_state.stability_status != StabilityStatus.UNSTABLE)
+        cp_close = (np.linalg.norm(
+            shared_state.capture_point - shared_state.stance_foot_world_pos[:2]
+        ) < COM_SHIFT_THRESHOLD)
 
         if stable and cp_close:
             self._transition_to(StepPhase.LIFT)
@@ -236,7 +256,7 @@ class GaitPlannerController:
 
         if timer >= COM_SHIFT_TIMEOUT:
             swing_force = self._swing_foot_force()
-            if swing_force > UNLOAD_FORCE_THRESHOLD:
+            if swing_force > SWING_UNLOAD_THRESHOLD:
                 self._abort_to_double_support()
             else:
                 self._transition_to(StepPhase.LIFT)
@@ -244,17 +264,26 @@ class GaitPlannerController:
     def _handle_lift(self, dt: float) -> None:
         self._compute_stance_ik()
 
-        timer       = shared_state.step_phase_timer
-        swing_force = self._swing_foot_force()
-        swing_vel_z = abs(float(self._swing_foot_velocity()[2]))
+        timer        = shared_state.step_phase_timer
+        swing_force  = self._swing_foot_force()
+        stance_force = self._stance_foot_force()
+        swing_vel_z  = abs(float(self._swing_foot_velocity()[2]))
 
-        if swing_force < UNLOAD_FORCE_THRESHOLD and swing_vel_z < SETTLE_VEL_THRESHOLD:
+        # Advance to SWING only when the SWING foot is unloaded AND the STANCE
+        # foot is actively bearing weight.  A PyBullet GJK glitch can zero both
+        # forces simultaneously; without the stance guard the robot would enter
+        # SWING with the stance leg also unloaded, causing force collapse.
+        if (swing_force  < SWING_UNLOAD_THRESHOLD and
+                swing_vel_z < SETTLE_VEL_THRESHOLD and
+                stance_force >= STANCE_LOAD_THRESHOLD):
             self._snapshot_swing_foot_x()
             self._transition_to(StepPhase.SWING)
             return
 
         if timer >= LIFT_TIMEOUT:
-            if swing_force > UNLOAD_FORCE_THRESHOLD:
+            # Abort if: swing foot still loaded, OR stance foot not bearing weight.
+            if (swing_force  > SWING_UNLOAD_THRESHOLD or
+                    stance_force < STANCE_LOAD_THRESHOLD):
                 self._abort_to_double_support()
             else:
                 self._snapshot_swing_foot_x()
@@ -327,7 +356,7 @@ class GaitPlannerController:
 
         # Timeout: route by force
         if shared_state.step_phase_timer >= PLACE_TIMEOUT:
-            if self._swing_foot_force() > UNLOAD_FORCE_THRESHOLD:
+            if self._swing_foot_force() > SWING_UNLOAD_THRESHOLD:
                 # Sensor lagged — contact happened; complete step
                 self._complete_step()
             else:
@@ -381,6 +410,12 @@ class GaitPlannerController:
 
     def _swing_foot_force(self) -> float:
         side = shared_state.active_swing_side
+        return float(shared_state.left_foot_force  if side == "left"
+                     else shared_state.right_foot_force)
+
+    def _stance_foot_force(self) -> float:
+        """Normal force on the STANCE (weight-bearing) foot, N."""
+        side = shared_state.stance_side
         return float(shared_state.left_foot_force  if side == "left"
                      else shared_state.right_foot_force)
 

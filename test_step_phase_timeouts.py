@@ -9,9 +9,10 @@ import gait_planner
 
 
 def _reset():
-    shared_state.freeze_robot              = False
-    shared_state.emergency_stop_triggered  = False
-    shared_state.mission_state             = MissionState.WALK
+    shared_state.freeze_robot                = False
+    shared_state.timing_violation_this_cycle = False
+    shared_state.emergency_stop_triggered    = False
+    shared_state.mission_state               = MissionState.WALK
     shared_state.ramp_gain                 = 1.0
     shared_state.last_dt                   = 0.01
     shared_state.step_phase                = StepPhase.DOUBLE_SUPPORT
@@ -72,11 +73,12 @@ def test_lift_timeout_high_force_aborts_to_ds():
 
 
 def test_lift_timeout_low_force_proceeds_to_swing():
-    """LIFT timeout: swing force low → proceed → SWING."""
+    """LIFT timeout: swing force low, stance loaded → proceed → SWING."""
     _reset()
-    shared_state.step_phase       = StepPhase.LIFT
-    shared_state.step_phase_timer = 0.16
-    shared_state.left_foot_force  = 2.0
+    shared_state.step_phase         = StepPhase.LIFT
+    shared_state.step_phase_timer   = 0.16
+    shared_state.left_foot_force    = 2.0    # N, < SWING_UNLOAD_THRESHOLD=5 N
+    shared_state.right_foot_force   = 65.0   # N, > STANCE_LOAD_THRESHOLD=60 N
     shared_state.left_foot_velocity = np.zeros(3)
     gait_planner.update_gait_planner()
     assert shared_state.step_phase == StepPhase.SWING
@@ -100,7 +102,7 @@ def test_place_timeout_high_force_completes_step():
     _reset()
     shared_state.step_phase       = StepPhase.PLACE
     shared_state.step_phase_timer = 0.51   # > PLACE_TIMEOUT=0.5
-    shared_state.left_foot_force  = 20.0   # > UNLOAD_FORCE_THRESHOLD
+    shared_state.left_foot_force  = 20.0   # N, > SWING_UNLOAD_THRESHOLD=5 N
     shared_state.left_foot_velocity = np.zeros(3)
     gait_planner.update_gait_planner()
     assert shared_state.step_phase == StepPhase.DOUBLE_SUPPORT
