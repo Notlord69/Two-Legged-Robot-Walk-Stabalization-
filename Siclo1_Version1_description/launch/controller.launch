@@ -1,0 +1,9 @@
+<launch>
+
+<rosparam file="$(find Siclo1_description)/launch/controller.yaml" command="load"/>
+<node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" ns="Siclo1" args="Left_Hip_Twist_position_controller Left_Hip_Inwards_position_controller Left_Hip_Forwards_position_controller Left_Knee_position_controller Left_Ankle_position_controller Right_Hip_Twist_position_controller Right_Hip_Inwards_position_controller Right_Hip_Fowards_position_controller Right_Knee_position_controller Right_Ankle_position_controller joint_state_controller "/>
+<node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" respawn="false" output="screen">
+  <remap from="/joint_states" to="/Siclo1/joint_states"/>
+</node>
+
+</launch>

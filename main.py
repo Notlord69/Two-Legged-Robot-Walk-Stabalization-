@@ -8,8 +8,10 @@ Usage:
     python3 main.py --gui --duration 2000 --hold   # 2000 cycles, inspect final pose
     python3 main.py --walk 2.0                     # walk 2.0 m headless
     python3 main.py --gui --walk 2.0               # walk 2.0 m with GUI
+    python3 main.py --on                           # enable terminal telemetry output
 """
 import argparse
+import sys
 import time
 import pybullet as p
 from HeartBeat import Siclo1Controller
@@ -29,6 +31,8 @@ def _make_parser() -> argparse.ArgumentParser:
                         help="Keep GUI window open after summary for pose inspection")
     parser.add_argument("--walk", type=float, default=None, metavar="METRES",
                         help="Walk forward D metres then stop (e.g. --walk 2.0)")
+    parser.add_argument("--on", action="store_true",
+                        help="Enable telemetry terminal output (default: off; data always written to CSV/summary)")
     return parser
 
 
@@ -45,8 +49,13 @@ def _viz_decimation(viz_hz: int) -> int:
 def main(argv=None) -> None:
     args = _make_parser().parse_args(argv)
     decimation = _viz_decimation(args.viz_hz)
+    # Reconstruct the exact invocation so summary.txt is self-describing
+    _argv = argv if argv is not None else sys.argv[1:]
+    argv_command = "python3 main.py " + " ".join(_argv) if _argv else "python3 main.py"
     controller = Siclo1Controller(use_gui=args.gui, viz_decimation=decimation,
-                                  walk_distance=args.walk)
+                                  walk_distance=args.walk,
+                                  argv_command=argv_command,
+                                  quiet=not args.on)
     try:
         controller.run(max_cycles=args.duration)
     except KeyboardInterrupt:

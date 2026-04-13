@@ -1,0 +1,280 @@
+# Eliminate Logging Latency: Producer-Consumer Telemetry Architecture
+
+## Problem
+
+Three allocation/I/O traps live inside the 100Hz heartbeat path:
+
+| Trap | Location | Cost |
+|---|---|---|
+| `add_error()` f-string + dynamic `list.append()` | `shared_state.py:230-234` | f-string alloc + lock contention + GC |
+| `_BufferedLog.log()` deque append | `HeartBeat.py:78-79` | deque node alloc + GC |
+| `HeartbeatController.cycle_times/violations` unbounded lists | `HeartBeat.py:109-110, 119, 136` | `list.append()` growing + GC |
+| `_log_status()` f-string formatting every 100 cycles | `HeartBeat.py:586-595` | f-string alloc inside loop |
+
+Worst case: Python GC collects during a cycle, stacking with any I/O → 3010ms overrun.
+
+## Proposed Changes
+
+### 1. shared_state.py — Pre-allocated Telemetry Ring Buffer
+
+#### [MODIFY] [shared_state.py](file:///home/notlord/ros2_ws/Siclo1_V1/shared_state.py)
+
+**Add `TelemetryRingBuffer` class** — a lock-free, pre-allocated numpy-backed circular buffer:
+
+```python
+class TelemetryRingBuffer:
+    """
+    Pre-allocated numpy ring buffer for zero-allocation telemetry.
+    
+    Each row stores one telemetry sample:
+    [timestamp, cycle, error_code, com_x, com_y, com_z,
+     left_contact_state, right_contact_state, stability_status,
+     left_force, right_force, stability_margin, compute_time_us,
+     extra_0, extra_1, extra_2]
+    
+    Producer (100Hz): writes raw floats via write().
+    Consumer (10Hz): reads via read_batch().
+    """
+    COLS = 16
+    
+    def __init__(self, capacity: int = 2048):
+        self._buf = np.zeros((capacity, self.COLS), dtype=np.float64)
+        self._capacity = capacity
+        self._write_idx = 0  # monotonic, consumer uses modulo
+        self._read_idx = 0
+    
+    def write(self, row: np.ndarray) -> None:
+        """O(1), zero-alloc write. Overwrites oldest on full."""
+        idx = self._write_idx % self._capacity
+        self._buf[idx, :] = row
+        self._write_idx += 1
+    
+    def read_batch(self) -> np.ndarray:
+        """Returns unread rows (may be empty). Consumer call."""
+        w = self._write_idx
+        r = self._read_idx
+        if w == r:
+            return np.empty((0, self.COLS))
+        # Handle wraparound
+        count = min(w - r, self._capacity)
+        start = r % self._capacity
+        end = w % self._capacity
+        self._read_idx = w
+        if end > start:
+            return self._buf[start:end].copy()
+        else:
+            return np.vstack([self._buf[start:], self._buf[:end]])
+```
+
+**Modify `Siclo1State.__init__`** — add:
+```python
+# Pre-allocated telemetry bus
+self.telemetry = TelemetryRingBuffer(capacity=2048)
+self._telem_row = np.zeros(TelemetryRingBuffer.COLS, dtype=np.float64)  # scratch row
+
+# Pre-allocated error ring (numeric codes, no strings)
+self._error_codes = np.zeros(256, dtype=np.int32)
+self._error_timestamps = np.zeros(256, dtype=np.float64)
+self._error_write_idx = 0
+```
+
+**Replace `add_error()`** with numeric-only version:
+```python
+# Error code constants (module-level)
+ERR_TIMING_VIOLATION  = 1
+ERR_MID_CYCLE_OVERRUN = 2
+ERR_UNSAFE_IMPACT     = 3
+ERR_SLIP_FORCE_DROP   = 4
+ERR_SLIP_LATERAL_VEL  = 5
+
+def add_error_code(self, code: int) -> None:
+    """O(1) zero-alloc error logging. No strings, no lock."""
+    idx = self._error_write_idx % 256
+    self._error_codes[idx] = code
+    self._error_timestamps[idx] = self.sim_time
+    self._error_write_idx += 1
+```
+
+> [!IMPORTANT]
+> The old `add_error(msg: str)` is kept but marked `@deprecated` — it must NEVER be called from the 100Hz path. Only `add_error_code(int)` is legal on the fast path.
+
+---
+
+### 2. HeartBeat.py — Fast Path Producer + TelemetryThread Consumer
+
+#### [MODIFY] [HeartBeat.py](file:///home/notlord/ros2_ws/Siclo1_V1/HeartBeat.py)
+
+**A. Replace `_BufferedLog` with `TelemetryThread`:**
+
+```python
+class TelemetryThread(threading.Thread):
+    """
+    Low-priority consumer thread.
+    Drains TelemetryRingBuffer at ~10Hz.
+    All string formatting and stdout I/O happens HERE, never in the Heartbeat.
+    """
+    daemon = True
+    
+    def __init__(self, state: Siclo1State):
+        super().__init__(name="TelemetryConsumer")
+        self._state = state
+        self._stop_event = threading.Event()
+        self._log_lines: list = []  # Only the consumer thread touches this
+    
+    def run(self):
+        while not self._stop_event.is_set():
+            batch = self._state.telemetry.read_batch()
+            if batch.shape[0] > 0:
+                self._format_batch(batch)
+            self._stop_event.wait(timeout=0.1)  # ~10Hz
+    
+    def _format_batch(self, batch: np.ndarray):
+        """Convert raw numeric rows to human-readable lines (slow path)."""
+        for row in batch:
+            ts, cycle, err, cx, cy, cz, lc, rc, stab, lf, rf, margin, comp_us, *_ = row
+            line = (f"[t={ts:7.3f}s c={int(cycle):>6d}] "
+                    f"COM=[{cx:+.3f},{cy:+.3f},{cz:+.3f}] "
+                    f"L={int(lc)} R={int(rc)} Stab={int(stab)} "
+                    f"F=[{lf:.0f},{rf:.0f}] "
+                    f"margin={margin:.4f} "
+                    f"compute={comp_us:.0f}µs")
+            if int(err) > 0:
+                line += f" ERR={int(err)}"
+            self._log_lines.append(line)
+    
+    def stop(self):
+        self._stop_event.set()
+    
+    def flush_to_stdout(self):
+        for line in self._log_lines:
+            print(line)
+        self._log_lines.clear()
+```
+
+**B. Refactor `HeartbeatController` — replace dynamic lists with pre-allocated numpy arrays:**
+
+```python
+class HeartbeatController:
+    __slots__ = (
+        'target_dt', 'cycle_start', 'last_cycle_end',
+        '_cycle_times', '_violations_count', '_cycle_count',
+        '_max_compute', '_min_compute', '_sum_compute', '_sum_sq_compute',
+    )
+    
+    def __init__(self, target_dt=TARGET_DT):
+        self.target_dt = target_dt
+        self.cycle_start = 0.0
+        self.last_cycle_end = 0.0
+        self._cycle_count = 0
+        self._violations_count = 0
+        # Running statistics — no arrays needed
+        self._max_compute = 0.0
+        self._min_compute = float('inf')
+        self._sum_compute = 0.0
+        self._sum_sq_compute = 0.0
+```
+
+Replace `cycle_times.append(actual_dt)` and the `violations.append(dict)` with scalar accumulation:
+
+```python
+def start_cycle(self):
+    now = time.perf_counter()
+    self.cycle_start = now
+    if self._cycle_count > 0:
+        actual_dt = now - self.last_cycle_end
+        shared_state.last_dt = actual_dt
+    return now
+
+def end_cycle(self):
+    now = time.perf_counter()
+    compute_time = now - self.cycle_start
+    violation = compute_time > self.target_dt
+    
+    # Running stats — zero allocation
+    if compute_time > self._max_compute:
+        self._max_compute = compute_time
+    if compute_time < self._min_compute:
+        self._min_compute = compute_time
+    self._sum_compute += compute_time
+    self._sum_sq_compute += compute_time * compute_time
+    
+    if violation:
+        self._violations_count += 1
+        shared_state.increment_timing_violations()
+        shared_state.add_error_code(ERR_TIMING_VIOLATION)
+    else:
+        # Hybrid sleep + spin-wait (unchanged)
+        ...
+```
+
+**C. Refactor `Siclo1Controller.step()` — produce telemetry row:**
+
+After `stepSimulation`, instead of `_log_status()`, stamp a raw numpy row:
+
+```python
+# Write telemetry (zero-alloc: reuse scratch row)
+row = shared_state._telem_row
+row[0] = shared_state.sim_time
+row[1] = shared_state.cycle_count
+row[2] = 0  # error code (set if violation)
+row[3] = shared_state.com_position[0]
+row[4] = shared_state.com_position[1]
+row[5] = shared_state.com_position[2]
+row[6] = shared_state.left_foot_contact_state.value
+row[7] = shared_state.right_foot_contact_state.value
+row[8] = shared_state.stability_status.value
+row[9] = shared_state.left_foot_force
+row[10] = shared_state.right_foot_force
+row[11] = shared_state.stability_margin
+row[12] = comp_time * 1e6  # microseconds
+shared_state.telemetry.write(row)
+```
+
+**D. Start/stop TelemetryThread in `Siclo1Controller.__init__` / `shutdown()`:**
+
+```python
+self._telemetry_thread = TelemetryThread(self.shared_state)
+self._telemetry_thread.start()
+```
+
+---
+
+### 3. Perception Hot Path — Replace `add_error()` with `add_error_code()`
+
+#### [MODIFY] [perception.py](file:///home/notlord/ros2_ws/Siclo1_V1/perception.py)
+
+Replace three `shared_state.add_error(f"...")` calls with `shared_state.add_error_code(ERR_...)`:
+
+| Line | Old | New |
+|---|---|---|
+| 144 | `shared_state.add_error(f"...Unsafe impact...")` | `shared_state.add_error_code(ERR_UNSAFE_IMPACT)` |
+| 231 | `shared_state.add_error(f"...Slip detected (force drop...")` | `shared_state.add_error_code(ERR_SLIP_FORCE_DROP)` |
+| 239 | `shared_state.add_error(f"...Slip detected (lateral v...")` | `shared_state.add_error_code(ERR_SLIP_LATERAL_VEL)` |
+
+---
+
+## User Review Required
+
+> [!WARNING]
+> The `TelemetryRingBuffer` is a **single-producer, single-consumer** design. The 100Hz loop is the sole writer; the `TelemetryThread` is the sole reader. If a future module needs to write telemetry from a second thread, we'll need atomic indices. Is this acceptable for the current architecture?
+
+> [!IMPORTANT]
+> The old `add_error(msg: str)` is preserved for cold-path usage (init, shutdown, test code) but will be BANNED from the hot loop. All hot-path error reporting switches to `add_error_code(int)`. The `TelemetryThread` decodes error codes into human-readable strings on the slow path.
+
+## Open Questions
+
+1. **Ring buffer capacity**: 2048 samples = ~20.5 seconds at 100Hz. Is this sufficient, or do you want a larger window (e.g., full mission duration as a flat numpy array)?
+2. **Disk logging**: Should the `TelemetryThread` also write to a `.csv` file, or is stdout sufficient for now?
+3. **`_log_status()` decimation**: Currently logs every 1.0s (100 cycles). The new telemetry writes every cycle. Should the consumer still decimate its stdout output to ~1Hz for readability?
+
+## Verification Plan
+
+### Automated Tests
+1. Run the refactored `HeartBeat.py` for 10s and inspect:
+   - Zero f-string calls inside the 100Hz path (verified by grep)
+   - Zero `list.append()` calls inside the 100Hz path (verified by grep)
+   - Timing statistics show mean_dt ≤ 10.0ms, jitter < 1.0ms
+2. `TelemetryThread` output matches expected format after `flush_to_stdout()`
+
+### Manual Verification
+- Diff the hot-path (`step()`, `end_cycle()`, `start_cycle()`) and confirm no surviving string ops or dynamic allocations.

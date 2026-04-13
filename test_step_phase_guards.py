@@ -9,9 +9,10 @@ import gait_planner
 
 
 def _reset():
-    shared_state.freeze_robot              = False
-    shared_state.emergency_stop_triggered  = False
-    shared_state.mission_state             = MissionState.WALK
+    shared_state.freeze_robot                = False
+    shared_state.timing_violation_this_cycle = False
+    shared_state.emergency_stop_triggered    = False
+    shared_state.mission_state               = MissionState.WALK
     shared_state.ramp_gain                 = 1.0
     shared_state.last_dt                   = 0.01
     shared_state.step_phase                = StepPhase.DOUBLE_SUPPORT

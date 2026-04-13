@@ -1,0 +1,16 @@
+Session: 2026-04-13_18-48-00
+Command        : python3 main.py --gui
+Total cycles   : 80
+Analyzed cycles: 30  (warmup excluded: 50)
+
+[TIMING]
+  Mean compute : 14.302 ms
+  Std dev      : 23.274 ms
+  Min          : 0.553 ms
+  Max          : 87.675 ms
+  Jitter       : 23.274 ms
+  Violations   : 10  (33.3%)
+  Status       : FAIL
+
+[ERRORS]
+  Coded errors in ring: 13

@@ -14,11 +14,13 @@ import math
 from sim.interface import add_debug_line
 from kinematics import R_MIN, R_MAX
 
-_ARC_SEGS     = 18                   # line segments per semicircle arc
-_ARC_COLOR    = [0.6, 0.85, 1.0]    # light blue
-_ACTUAL_COLOR = [0.0, 1.0, 0.0]     # green — hip → actual foot
-_TARGET_COLOR = [1.0, 0.0, 0.0]     # red   — hip → foot target
-_ZERO_VEC     = (0.0, 0.0, 0.0)     # sentinel: no active target
+_ARC_SEGS       = 18                   # line segments per semicircle arc
+_ARC_COLOR      = [0.6, 0.85, 1.0]    # light blue
+_ACTUAL_COLOR   = [0.0, 1.0, 0.0]     # green — hip → actual foot
+_TARGET_COLOR   = [1.0, 0.0, 0.0]     # red   — hip → foot target
+_ZERO_VEC       = (0.0, 0.0, 0.0)     # sentinel: no active target
+_VECTOR_LIFETIME = 0.03               # s — vectors self-destruct after 3 physics cycles; prevents buffer accumulation
+_VISUAL_SILENCE  = 10                 # cycles — wait for URDF to fully render before drawing
 
 
 def _arc_points(hip_pos: tuple, radius: float,
@@ -55,10 +57,11 @@ class DebugVisualizer:
 
     def __init__(self, physics_client: int):
         self._pc = physics_client
+        self._cycle_count: int = 0              # guards Visual Silence window
         # Arc segment IDs: 4 arcs × _ARC_SEGS segments each
         # Order: L_Rmin, L_Rmax, R_Rmin, R_Rmax
         self._arc_ids: list[int] = [-1] * (4 * _ARC_SEGS)
-        # Life-limited vector IDs
+        # Vector IDs — stale after _VECTOR_LIFETIME; kept for replace-in-place attempts
         self._left_actual_id:  int = -1
         self._right_actual_id: int = -1
         self._left_target_id:  int = -1
@@ -71,6 +74,10 @@ class DebugVisualizer:
         left_hip:  world pos of left  hip-pitch joint (m)
         right_hip: world pos of right hip-pitch joint (m)
         """
+        self._cycle_count += 1
+        if self._cycle_count < _VISUAL_SILENCE:
+            return  # buffer protection: wait for URDF to fully render
+
         self._update_annulus(left_hip, right_hip)
         self._left_actual_id  = self._draw_vector(
             left_hip,  state.left_foot_position,
@@ -91,11 +98,12 @@ class DebugVisualizer:
 
     def _draw_vector(self, from_pos: tuple, to_pos: tuple,
                      color: list, old_id: int) -> int:
-        """Draw or replace one debug line. Returns the new item ID."""
+        """Draw or replace one debug line with auto-expiry. Returns the new item ID."""
         return add_debug_line(
             from_pos, to_pos, color,
             width=2.0,
             replace_id=old_id,
+            life_time=_VECTOR_LIFETIME,   # self-destruct after 3 physics cycles
             physics_client=self._pc,
         )
 

@@ -1,0 +1,16 @@
+Session: 2026-04-12_21-16-43
+Command        : python3 main.py --walk 3
+Total cycles   : 302
+Analyzed cycles: 252  (warmup excluded: 50)
+
+[TIMING]
+  Mean compute : 1.026 ms
+  Std dev      : 0.343 ms
+  Min          : 0.598 ms
+  Max          : 2.593 ms
+  Jitter       : 0.343 ms
+  Violations   : 0  (0.0%)
+  Status       : PASS
+
+[ERRORS]
+  Coded errors in ring: 0

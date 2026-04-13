@@ -11,8 +11,9 @@ import gait_planner
 
 def _full_step_setup():
     """Configure shared_state at the beginning of a full step cycle."""
-    shared_state.freeze_robot              = False
-    shared_state.mission_state             = MissionState.WALK
+    shared_state.freeze_robot                = False
+    shared_state.timing_violation_this_cycle = False
+    shared_state.mission_state               = MissionState.WALK
     shared_state.ramp_gain                 = 1.0
     shared_state.last_dt                   = 0.01
     shared_state.step_phase                = StepPhase.DOUBLE_SUPPORT

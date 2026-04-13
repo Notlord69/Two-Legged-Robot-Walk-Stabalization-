@@ -95,6 +95,7 @@ class SessionLogger:
         total  = stats.get('total_cycles', 0)
         warmup = stats.get('warmup_cycles', WARMUP_CYCLES)
         coded  = stats.get('coded_errors', 0)
+        cmd    = stats.get('argv_command', '')
 
         summary_file = None
         try:
@@ -103,6 +104,7 @@ class SessionLogger:
 
             lines = [
                 f"Session: {session_name}",
+                f"Command        : {cmd if cmd else '(not recorded)'}",
                 f"Total cycles   : {total}",
                 f"Analyzed cycles: {n}  (warmup excluded: {warmup})",
                 "",
@@ -144,3 +146,159 @@ class SessionLogger:
                 self._csv = None
             if summary_file is not None:
                 summary_file.close()
+
+
+# ============================================================================
+# TELEMETRY THREAD  — extracted from HeartBeat.py, extended with file logging
+# ============================================================================
+
+class TelemetryThread(threading.Thread):
+    """
+    Low-priority consumer thread — drains TelemetryRingBuffer at ~10 Hz.
+
+    Responsibilities:
+      - Call SessionLogger.append_row() for every ring buffer row (all cycles)
+      - Update post-warmup online accumulators (cycle > WARMUP_CYCLES only)
+      - At tail of run(): final drain + write_summary()
+      - Maintain in-memory _log_lines for flush_to_stdout() (unchanged behaviour)
+
+    The 100 Hz hot path (HeartBeat.step) has zero knowledge of this class.
+
+    argv_command: the full CLI invocation string (e.g. "python3 main.py --gui --walk 2.0")
+                  written into summary.txt so every session is self-describing.
+    quiet:        when True, flush_to_stdout() and log() are no-ops — all data
+                  still goes to the CSV/summary; only terminal output is suppressed.
+    """
+    daemon = True
+
+    def __init__(self, state: Siclo1State, argv_command: str = "",
+                 quiet: bool = True) -> None:
+        super().__init__(name="TelemetryConsumer")
+        self._state        = state
+        self._stop_event   = threading.Event()
+        self._log_lines: list = []
+        self._argv_command = argv_command   # stored for summary.txt
+        self._quiet        = quiet          # suppresses all terminal output
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self._session = SessionLogger(base_dir)
+
+        # Online accumulators — post-warmup only, zero allocation (scalars)
+        self._total_cycles:    int   = 0
+        self._analyzed_cycles: int   = 0
+        self._sum_compute:     float = 0.0        # seconds
+        self._sum_sq_compute:  float = 0.0
+        self._max_compute:     float = 0.0
+        self._min_compute:     float = float('inf')
+        self._violations:      int   = 0
+
+    @property
+    def session_path(self) -> str:
+        return self._session.session_path
+
+    def run(self) -> None:
+        try:
+            while not self._stop_event.is_set():
+                self._drain()
+                self._stop_event.wait(timeout=0.1)  # ~10 Hz
+        except Exception as exc:
+            self.log(f"[FATAL] TelemetryThread crashed: {exc}")
+        finally:
+            # Tail drain + summary ALWAYS execute, even on exception
+            self._drain()
+            stats = self.get_summary_stats()
+            stats['coded_errors'] = self._state._error_write_idx
+            stats['argv_command'] = self._argv_command
+            self._session.write_summary(stats)
+
+    def _drain(self) -> None:
+        batch = self._state.telemetry.read_batch()
+        if batch.shape[0] > 0:
+            self._format_batch(batch)
+
+    def _format_batch(self, batch: np.ndarray) -> None:
+        """Write all rows to CSV; accumulate post-warmup stats; build log lines."""
+        for row in batch:
+            # Always write to CSV (warmup rows kept for black-box debugging)
+            self._session.append_row(row)
+            self._total_cycles += 1
+
+            ts, cycle, err, cx, cy, cz, lc, rc, stab, lf, rf, margin, comp_us, *_ = row
+
+            # Human-readable in-memory log (unchanged from HeartBeat.py)
+            line = (f"[t={ts:7.3f}s c={int(cycle):>6d}] "
+                    f"COM=[{cx:+.3f},{cy:+.3f},{cz:+.3f}] "
+                    f"L={int(lc)} R={int(rc)} Stab={int(stab)} "
+                    f"F=[{lf:.0f},{rf:.0f}] "
+                    f"margin={margin:.4f} "
+                    f"compute={comp_us:.0f}\u00b5s")
+            if int(err) > 0:
+                line += f" ERR={int(err)}"
+            self._log_lines.append(line)
+
+            # Post-warmup accumulation: strict greater-than (cycle 50 is warmup)
+            if cycle > WARMUP_CYCLES:
+                compute_s = comp_us / 1_000_000.0   # µs → seconds
+                self._analyzed_cycles += 1
+                self._sum_compute     += compute_s
+                self._sum_sq_compute  += compute_s * compute_s
+                if compute_s > self._max_compute:
+                    self._max_compute = compute_s
+                if compute_s < self._min_compute:
+                    self._min_compute = compute_s
+                if int(err) == ERR_TIMING_VIOLATION:
+                    self._violations += 1
+
+    def get_summary_stats(self) -> dict:
+        """
+        Timing stats in the same dict shape as HeartbeatController.get_statistics().
+        Returns zero-filled dict when no post-warmup cycles were analyzed
+        (e.g. run terminated inside the warm-up window).
+        """
+        n = self._analyzed_cycles
+        if n == 0:
+            return {
+                'mean_dt':         0.0,
+                'std_dt':          0.0,
+                'min_dt':          0.0,
+                'max_dt':          0.0,
+                'jitter_ms':       0.0,
+                'violations':      0,
+                'violation_rate':  0.0,
+                'total_cycles':    self._total_cycles,
+                'analyzed_cycles': 0,
+                'warmup_cycles':   WARMUP_CYCLES,
+                'coded_errors':    0,
+            }
+        mean     = self._sum_compute / n
+        variance = (self._sum_sq_compute / n) - (mean * mean)
+        std      = variance ** 0.5 if variance > 0.0 else 0.0
+        return {
+            'mean_dt':         mean,
+            'std_dt':          std,
+            'min_dt':          self._min_compute,
+            'max_dt':          self._max_compute,
+            'jitter_ms':       std * 1000.0,
+            'violations':      self._violations,
+            'violation_rate':  self._violations / max(1, n),
+            'total_cycles':    self._total_cycles,
+            'analyzed_cycles': n,
+            'warmup_cycles':   WARMUP_CYCLES,
+            'coded_errors':    0,   # caller overwrites from _state._error_write_idx
+        }
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def flush_to_stdout(self) -> None:
+        """Print buffered log lines to terminal, then clear them.
+        No-op when quiet=True — lines are still buffered (tests can inspect them)."""
+        if not self._quiet:
+            for line in self._log_lines:
+                print(line)
+        self._log_lines.clear()
+
+    def log(self, msg: str) -> None:
+        """Compatibility shim for cold-path messages (init, shutdown, tests).
+        Always buffers; terminal output suppressed when quiet=True."""
+        self._log_lines.append(msg)

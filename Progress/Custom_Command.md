@@ -78,14 +78,37 @@ The physics loop always runs at 100 Hz. The GUI renders every `100 ÷ viz_hz` ph
 
 ---
 
+### `--on`
+
+| Property | Value |
+|---|---|
+| Type | boolean (store_true) |
+| Default | off — terminal output is silent by default |
+
+**Effect when set:** Enables live telemetry output in the terminal — the per-cycle log dump and the final `SIMULATION COMPLETE` summary block are printed to stdout.
+
+**Without `--on` (default):** The terminal is silent. All data is still written to:
+- `sessions/<timestamp>/telemetry.csv` — every cycle, always
+- `sessions/<timestamp>/summary.txt` — timing stats + the exact command used, always
+
+The `summary.txt` always records the command that was used to start the simulation (e.g. `python3 main.py --gui --walk 2.0`) so you can identify session conditions without needing terminal output.
+
+---
+
 ## Examples
 
 ```bash
-# Headless smoke test — 500 cycles, maximum physics throughput
+# Headless smoke test — 500 cycles, silent terminal (CSV/summary still written)
 python3 main.py --duration 500
 
-# GUI at default 10 Hz, default 1000 cycles
+# GUI at default 10 Hz, default 1000 cycles, silent terminal
 python3 main.py --gui
+
+# GUI at default 10 Hz, walking distance of 2 meters, silent terminal
+python3 main.py --gui --walk 2.0
+
+# Same walk, but with full telemetry printed to terminal
+python3 main.py --gui --walk 2.0 --on
 
 # GUI at ~33 Hz render rate (smoother, higher GPU load)
 python3 main.py --gui --viz-hz 33
@@ -101,6 +124,9 @@ python3 main.py --gui --duration 2000 --hold
 
 # Slow-motion hold — 500 cycles at 1 Hz render, then inspect
 python3 main.py --gui --viz-hz 1 --duration 500 --hold
+
+# Headless run with terminal output enabled
+python3 main.py --duration 1000 --on
 ```
 
 ---
@@ -123,8 +149,10 @@ The arcs follow the robot as it moves. Lines are replaced in-place each render t
 
 | Profile | Command | Purpose |
 |---|---|---|
-| Smoke Test | `python3 main.py --duration 500` | Fast headless sanity check after a code change |
-| Standard | `python3 main.py --gui --duration 1000` | Default interactive run |
+| Smoke Test | `python3 main.py --duration 500` | Fast headless sanity check; check CSV after |
+| Standard | `python3 main.py --gui --duration 1000` | Default interactive run; silent terminal |
+| Verbose | `python3 main.py --gui --duration 1000 --on` | Same, with live telemetry in terminal |
 | Marathon | `python3 main.py --gui --duration 5000` | Extended stability / jitter measurement |
 | Hold Inspect | `python3 main.py --gui --duration 2000 --hold` | Inspect 687 mm shank final position |
 | Debug Slow-mo | `python3 main.py --gui --viz-hz 1 --duration 200 --hold` | Frame-by-frame visual debug |
+| Walk + Log | `python3 main.py --gui --walk 2.0 --on` | Walk 2 m with full terminal output |

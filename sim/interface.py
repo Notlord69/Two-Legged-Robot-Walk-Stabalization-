@@ -101,6 +101,7 @@ def set_joint_position_target(body_id: int, joint_index: int,
 def add_debug_line(from_xyz, to_xyz, color_rgb,
                    width: float = 1.0,
                    replace_id: int = -1,
+                   life_time: float = 0.0,
                    physics_client: int = 0) -> int:
     """Add or replace a PyBullet debug line. Returns item ID.
 
@@ -109,13 +110,14 @@ def add_debug_line(from_xyz, to_xyz, color_rgb,
     color_rgb:     [r, g, b] each in [0, 1]
     width:         line width in pixels
     replace_id:    item ID to update in-place; pass -1 to create a new line
+    life_time:     seconds until auto-removal; 0.0 = persistent (default)
     physics_client: PyBullet client ID (must be a GUI client to be visible)
 
     All p.* calls are confined to this file (CLAUDE.md).
     """
     import pybullet as p                       # deferred: not needed for URDF-only callers
     kwargs = dict(lineColorRGB=color_rgb, lineWidth=width,
-                  physicsClientId=physics_client)
+                  lifeTime=life_time, physicsClientId=physics_client)
     if replace_id >= 0:
         kwargs['replaceItemUniqueId'] = replace_id
     return p.addUserDebugLine(list(from_xyz), list(to_xyz), **kwargs)
@@ -139,3 +141,36 @@ def step_simulation(physics_client: int) -> None:
     """
     import pybullet as p                       # deferred: not needed for URDF-only callers
     p.stepSimulation(physicsClientId=physics_client)
+
+
+def capture_frame(physics_client: int,
+                  camera_target: tuple,
+                  width: int = 320,
+                  height: int = 240) -> 'np.ndarray':
+    """Render one camera frame via TinyRenderer (works in DIRECT mode, no GPU needed).
+
+    camera_target: (x, y, z) world-space point to aim at (typically robot COM)
+    width, height: output resolution in pixels
+    Returns: (H, W, 3) uint8 RGB numpy array
+
+    Eye is offset 1.5 m lateral, 0.5 m behind, 0.8 m above target so the full
+    robot body stays in frame during normal locomotion.
+    All p.* calls are confined to this file (CLAUDE.md).
+    """
+    import pybullet as p
+    import numpy as np
+    cx, cy, cz = float(camera_target[0]), float(camera_target[1]), float(camera_target[2])
+    eye = (cx + 1.5, cy + 0.5, cz + 0.8)
+    view = p.computeViewMatrix(
+        cameraEyePosition=eye,
+        cameraTargetPosition=(cx, cy, cz),
+        cameraUpVector=(0, 0, 1),
+    )
+    proj = p.computeProjectionMatrixFOV(
+        fov=60, aspect=width / height, nearVal=0.1, farVal=100.0,
+    )
+    _, _, rgba, _, _ = p.getCameraImage(
+        width, height, view, proj,
+        physicsClientId=physics_client,
+    )
+    return np.array(rgba, dtype=np.uint8)[:, :, :3]  # drop alpha channel

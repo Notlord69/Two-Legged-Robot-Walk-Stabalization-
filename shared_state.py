@@ -351,6 +351,12 @@ class Siclo1State:
         self.emergency_stop_triggered: bool = False
         self.freeze_robot: bool = False
 
+        # Set True by HeartBeat when mid-cycle computation already exceeded 10 ms.
+        # Cleared to False at the start of every cycle.
+        # Consumers (gait_planner) must skip phase advances when this is True to
+        # avoid acting on sensor data from an overlong, potentially corrupted cycle.
+        self.timing_violation_this_cycle: bool = False
+
         self.error_messages: List[str] = []
 
         # ====================================================================

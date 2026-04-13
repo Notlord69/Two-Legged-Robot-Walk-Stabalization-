@@ -1,0 +1,41 @@
+# Siclo1 Robust Contact State Transition Walkthrough
+
+Implemented a high-reliability foot contact state machine to prevent "physical ghosting" (prematurely activating balance controllers).
+
+## Changes Made
+
+### 1. Shared State Updates
+- **File**: [shared_state.py](file:///home/notlord/ros2_ws/Siclo1_V1/shared_state.py)
+- Added `left_contact_ticks`, `right_contact_ticks` ($O(1)$ counters).
+- Added `left_foot_flat`, `right_foot_flat` status booleans.
+
+### 2. Implementation in HeartBeat.py
+- **File**: [HeartBeat.py](file:///home/notlord/ros2_ws/Siclo1_V1/HeartBeat.py)
+- Integrated a 3-tick validation gate (30ms window) in the 100 Hz loop.
+- **Noise Filtering**: Increments ticks only if force > 5.0 N; resets to 0 immediately if force drops.
+- **Flat-Foot Verification**: Checks the spatial spread of contact points from `getContactPoints`. If the spread in the X-direction (forward/backward) is > 5cm, the foot is considered flat.
+- **Bug Fix**: Fixed a critical issue where [Siclo1Controller](file:///home/notlord/ros2_ws/Siclo1_V1/HeartBeat.py#385-642) was using a local state instance instead of the global singleton.
+
+### 3. Perception Module Refactor
+- **File**: [perception.py](file:///home/notlord/ros2_ws/Siclo1_V1/perception.py)
+- Simplified the [FootContactFSM](file:///home/notlord/ros2_ws/Siclo1_V1/perception.py#41-259) to rely on the robust 3-tick gate and flat-foot status provided by [HeartBeat.py](file:///home/notlord/ros2_ws/Siclo1_V1/HeartBeat.py).
+
+## Verification Results
+
+### Logic Verification (Unit Test)
+- Successfully verified the state transition sequence:
+    1. `NO_CONTACT`
+    2. `TOUCH_EXPECTED` (height < 0.05m)
+    3. `CONTACT_TENTATIVE` (ticks 1 and 2)
+    4. `CONTACT_CONFIRMED` (tick 3 AND flat-foot confirmed)
+- **Log Segment**:
+```text
+Tick 1 State: CONTACT_TENTATIVE (Expected: CONTACT_TENTATIVE)
+Tick 2 State: CONTACT_TENTATIVE (Expected: CONTACT_TENTATIVE)
+Tick 3 State (Not Flat): CONTACT_TENTATIVE (Expected: CONTACT_TENTATIVE)
+Tick 3 State (Flat): CONTACT_CONFIRMED (Expected: CONTACT_CONFIRMED)
+```
+
+### Performance
+- Maintained strict 10ms timing window.
+- Logic is $O(1)$ with no expensive re-computations.

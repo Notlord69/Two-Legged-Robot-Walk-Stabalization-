@@ -1,0 +1,15 @@
+Session: 2026-04-11_17-04-24
+Total cycles   : 302
+Analyzed cycles: 252  (warmup excluded: 50)
+
+[TIMING]
+  Mean compute : 1.002 ms
+  Std dev      : 0.305 ms
+  Min          : 0.479 ms
+  Max          : 2.090 ms
+  Jitter       : 0.305 ms
+  Violations   : 0  (0.0%)
+  Status       : PASS
+
+[ERRORS]
+  Coded errors in ring: 0

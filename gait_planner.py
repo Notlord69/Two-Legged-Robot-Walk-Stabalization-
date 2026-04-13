@@ -45,7 +45,7 @@ from shared_state import (
     shared_state, MissionState, StepPhase, ContactState, StabilityStatus,
     ERR_PHASE_TIMEOUT,
 )
-
+print("GAIT_PLANNER LOADED — version with DS gate")
 
 # ============================================================================
 # CONSTANTS
@@ -216,6 +216,15 @@ class GaitPlannerController:
     # ── Phase handlers ────────────────────────────────────────────────────────
 
     def _handle_double_support(self, dt: float) -> None:
+        lf = shared_state.left_foot_force
+        rf = shared_state.right_foot_force
+        both_confirmed = shared_state.both_feet_in_contact()
+        print(f"[GATE] timer={shared_state.step_phase_timer:.3f} "
+          f"ramp={shared_state.ramp_gain:.2f} "
+          f"both={both_confirmed} "
+          f"F=[{lf:.0f},{rf:.0f}] "
+          f"ratio={max(lf,rf)/min(lf,rf) if min(lf,rf)>0 else 999:.2f}")
+          
         # Lock stance foot exactly once on DS entry
         if self._ds_lock_pending:
             self._lock_stance_foot()

@@ -44,6 +44,7 @@ Date: February 2026 (URDF-synced March 2026)
 """
 
 import math
+import time
 import numpy as np
 from shapely.geometry import Point, Polygon
 from scipy.spatial import ConvexHull
@@ -164,6 +165,39 @@ def forward_kinematics_2d(joint_angles: Dict[str, float],
 
 
 # ============================================================================
+# PROFILING HELPER  (diagnostic — remove when root cause is identified)
+# ============================================================================
+
+def _emit_profile(t0: float, t1: float, t2: float, t3: float, t4: float,
+                  n_contacts: int) -> None:
+    """Print a one-line timing breakdown when total exceeds the threshold.
+
+    Stages:
+        COM       : compute_com_with_load + compute_com_velocity   (t0→t1)
+        contacts  : get_confirmed_contact_points + compute_safety_margin (t1→t2)
+        hull      : compute_support_polygon (ConvexHull + Shapely buffer) (t2→t3)
+        distance  : polygon.exterior.distance(cp_point)            (t3→t4)
+        total     : t0→t4
+
+    Output example (all µs):
+        [STAB-PROFILE] t=0.083 total=16142µs | COM=210 contacts=12 hull=15800 dist=120 | pts=6
+    """
+    total_us = (t4 - t0) * 1e6
+    if total_us < StabilityMonitor.PROFILE_THRESHOLD_US:
+        return
+    com_us  = (t1 - t0) * 1e6
+    cnt_us  = (t2 - t1) * 1e6
+    hull_us = (t3 - t2) * 1e6
+    dist_us = (t4 - t3) * 1e6
+    print(
+        f"[STAB-PROFILE] t={shared_state.sim_time:.3f}s "
+        f"total={total_us:.0f}µs | "
+        f"COM={com_us:.0f} contacts={cnt_us:.0f} hull={hull_us:.0f} dist={dist_us:.0f} | "
+        f"pts={n_contacts}"
+    )
+
+
+# ============================================================================
 # STABILITY MONITOR CLASS
 # ============================================================================
 
@@ -269,6 +303,10 @@ class StabilityMonitor:
             poly = poly.buffer(-margin)
         return poly
 
+    # Threshold above which per-stage timing is logged (µs).
+    # Set to 0 to log every cycle; set to float('inf') to disable.
+    PROFILE_THRESHOLD_US: float = 5000.0   # 5 ms — half the 10 ms budget
+
     def check_stability(self, dt: float) -> StabilityStatus:
         """
         Main stability check.
@@ -281,21 +319,34 @@ class StabilityMonitor:
         Writes to shared_state:
             com_position, com_velocity, stability_status,
             stability_margin, current_safety_margin, support_polygon
+
+        PROFILING: when total time exceeds PROFILE_THRESHOLD_US, emits a
+        one-line breakdown showing which stage dominates.  Remove or set
+        PROFILE_THRESHOLD_US = float('inf') after root cause is identified.
         """
+        _t0 = time.perf_counter()
+
         com = self.compute_com_with_load()
         com_vel = self.compute_com_velocity(com, dt)
         shared_state.com_position = com
         shared_state.com_velocity = com_vel
 
+        _t1 = time.perf_counter()
+
         contact_points = shared_state.get_confirmed_contact_points()
         safety_margin = self.compute_safety_margin()
         shared_state.current_safety_margin = safety_margin
 
+        _t2 = time.perf_counter()
+
         polygon = self.compute_support_polygon(contact_points, safety_margin)
         shared_state.support_polygon = polygon
 
+        _t3 = time.perf_counter()
+
         if polygon is None or polygon.is_empty or polygon.area < 1e-6:
             shared_state.set_stability_status(StabilityStatus.UNSTABLE, margin=0.0)
+            _emit_profile(_t0, _t1, _t2, _t3, _t3, len(contact_points))
             return StabilityStatus.UNSTABLE
 
         # Capture Point — LIPM extrapolated COM (Option A).
@@ -310,6 +361,8 @@ class StabilityMonitor:
         cp_point = Point(cp_xy[0], cp_xy[1])
         if polygon.contains(cp_point):
             margin_distance = polygon.exterior.distance(cp_point)
+            _t4 = time.perf_counter()
+            _emit_profile(_t0, _t1, _t2, _t3, _t4, len(contact_points))
             if margin_distance > safety_margin * 0.5:
                 shared_state.set_stability_status(StabilityStatus.STABLE, margin=margin_distance)
                 return StabilityStatus.STABLE
@@ -318,6 +371,8 @@ class StabilityMonitor:
                 return StabilityStatus.MARGINAL
         else:
             margin_distance = -polygon.exterior.distance(cp_point)
+            _t4 = time.perf_counter()
+            _emit_profile(_t0, _t1, _t2, _t3, _t4, len(contact_points))
             shared_state.set_stability_status(StabilityStatus.UNSTABLE, margin=margin_distance)
             return StabilityStatus.UNSTABLE
 

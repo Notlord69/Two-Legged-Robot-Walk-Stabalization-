@@ -1,0 +1,114 @@
+<?xml version="1.0" ?>
+<robot name="Siclo1" xmlns:xacro="http://www.ros.org/wiki/xacro" >
+
+<transmission name="Left_Hip_Twist_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Left_Hip_Twist">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Left_Hip_Twist_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Left_Hip_Inwards_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Left_Hip_Inwards">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Left_Hip_Inwards_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Left_Hip_Forwards_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Left_Hip_Forwards">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Left_Hip_Forwards_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Left_Knee_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Left_Knee">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Left_Knee_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Left_Ankle_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Left_Ankle">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Left_Ankle_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Right_Hip_Twist_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Right_Hip_Twist">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Right_Hip_Twist_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Right_Hip_Inwards_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Right_Hip_Inwards">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Right_Hip_Inwards_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Right_Hip_Fowards_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Right_Hip_Fowards">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Right_Hip_Fowards_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Right_Knee_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Right_Knee">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Right_Knee_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="Right_Ankle_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="Right_Ankle">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="Right_Ankle_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+</robot>

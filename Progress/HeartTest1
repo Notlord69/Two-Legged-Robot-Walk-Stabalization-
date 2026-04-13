@@ -1,0 +1,107 @@
+pybullet build time: Jan 29 2025 23:16:28
+
+╔════════════════════════════════════════════════════════════════════════╗
+║                    PROJECT SICLO1 - MAIN CONTROLLER                    ║
+║                                                                        ║
+║  200Hz Deterministic Heartbeat                                        ║
+║  Modular Architecture with Shared State                               ║
+║                                                                        ║
+║  Modules:                                                              ║
+║    • Perception   (Contact FSM)                                       ║
+║    • Stability    (COM Tracking + Load Offset)                        ║
+║    • Recovery     (Failure Response)                                  ║
+║                                                                        ║
+╚════════════════════════════════════════════════════════════════════════╝
+    
+startThreads creating 1 threads.
+starting thread 0
+started thread 0 
+argc=2
+argv[0] = --unused
+argv[1] = --start_demo_name=Physics Server
+ExampleBrowserThreadFunc started
+X11 functions dynamically loaded using dlopen/dlsym OK!
+X11 functions dynamically loaded using dlopen/dlsym OK!
+Creating context
+Created GL 3.3 context
+Direct GLX rendering context obtained
+Making context current
+GL_VENDOR=Microsoft Corporation
+GL_RENDERER=D3D12 (Intel(R) Iris(R) Xe Graphics)
+GL_VERSION=4.1 (Core Profile) Mesa 23.2.1-1ubuntu3.1~22.04.3
+GL_SHADING_LANGUAGE_VERSION=4.10
+pthread_getconcurrency()=0
+Version = 4.1 (Core Profile) Mesa 23.2.1-1ubuntu3.1~22.04.3
+Vendor = Microsoft Corporation
+Renderer = D3D12 (Intel(R) Iris(R) Xe Graphics)
+b3Printf: Selected demo: Physics Server
+startThreads creating 1 threads.
+starting thread 0
+started thread 0 
+MotionThreadFunc thread started
+ven = Microsoft Corporation
+ven = Microsoft Corporation
+[Siclo1] Initialized
+  Target frequency: 200.0 Hz
+  Target dt: 5.00 ms
+  GUI: Enabled
+
+======================================================================
+STARTING SIMULATION - 10.0s @ 200Hz
+======================================================================
+
+[WARNING] Timing violation at cycle 1: 9.37ms > 5.00ms
+[t=  0.01s] System: NOMINAL    | Stability: UNSTABLE   | L: TOUCH_EXPECTED       | R: TOUCH_EXPECTED       | Recovery: NONE           
+[t=  1.01s] System: NOMINAL    | Stability: UNSTABLE   | L: TOUCH_EXPECTED       | R: TOUCH_EXPECTED       | Recovery: NONE           
+[t=  2.00s] System: NOMINAL    | Stability: UNSTABLE   | L: TOUCH_EXPECTED       | R: TOUCH_EXPECTED       | Recovery: NONE           
+[WARNING] Timing violation at cycle 416: 18.56ms > 5.00ms
+[t=  3.00s] System: NOMINAL    | Stability: UNSTABLE   | L: TOUCH_EXPECTED       | R: TOUCH_EXPECTED       | Recovery: NONE           
+[EMERGENCY] Emergency stop triggered
+
+[STOPPED] Simulation stopped at t=3.01s
+
+======================================================================
+SIMULATION COMPLETE - FINAL SUMMARY
+======================================================================
+
+[TIMING]
+  Mean dt: 5.222 ms
+  Std dt: 0.594 ms
+  Jitter: 0.594 ms
+  Violations: 2 (0.3%)
+
+[RECOVERY]
+  Total events: 1
+  Successful: 0
+  Failed: 1
+  Abort/Hold: 0
+  Reposition: 0
+  Emergency: 1
+
+[FINAL STATE]
+  Total cycles: 602
+  System status: EMERGENCY
+  Load: 0.0 kg
+  COM: [0.000, 0.000, 1.000]
+  Errors logged: 2
+
+======================================================================
+
+
+[Siclo1] Shutting down...
+numActiveThreads = 0
+stopping threads
+Thread with taskId 0 exiting
+Thread TERMINATED
+destroy semaphore
+semaphore destroyed
+destroy main semaphore
+main semaphore destroyed
+finished
+numActiveThreads = 0
+btShutDownExampleBrowser stopping threads
+Thread with taskId 0 exiting
+Thread TERMINATED
+destroy semaphore
+semaphore destroyed
+Segmentation fault (core dumped)
