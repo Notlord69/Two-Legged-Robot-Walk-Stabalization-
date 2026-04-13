@@ -163,6 +163,11 @@ def _compute_leg_correction(
     }
 
 
+# Fallback z_hip when link_positions not yet populated (first cycle).
+# Produces leg_ext = Z_REST → spring term = 0 → F_z = GRAVITY_COMP. Safe default.
+_Z_HIP_DEFAULT: float = Z_REST   # m
+
+
 # ============================================================================
 # GRF CONTROLLER
 # ============================================================================
@@ -195,6 +200,10 @@ class GRFController:
 
         jp = shared_state.joint_positions
 
+        lp = shared_state.link_positions
+        z_hip_left  = float(lp['Left_Upper_Leg_1'][2])  if 'Left_Upper_Leg_1'  in lp else _Z_HIP_DEFAULT
+        z_hip_right = float(lp['Right_Upper_Leg_1'][2]) if 'Right_Upper_Leg_1' in lp else _Z_HIP_DEFAULT
+
         # Phase-aware eligibility: during LIFT/SWING/PLACE the swing leg is
         # suppressed even if its contact sensor still reads CONTACT_CONFIRMED.
         step_phase  = shared_state.step_phase
@@ -209,6 +218,7 @@ class GRFController:
                 shared_state.left_foot_contact_state == ContactState.CONTACT_CONFIRMED):
             result.update(_compute_leg_correction(
                 z_foot      = float(shared_state.left_foot_position[2]),
+                z_hip       = z_hip_left,
                 z_dot_foot  = float(shared_state.left_foot_velocity[2]),
                 q_hip_urdf  = jp.get('Left_Hip_Forwards', 0.0),
                 q_knee_urdf = jp.get('Left_Knee', 0.0),
@@ -227,6 +237,7 @@ class GRFController:
                 shared_state.right_foot_contact_state == ContactState.CONTACT_CONFIRMED):
             result.update(_compute_leg_correction(
                 z_foot      = float(shared_state.right_foot_position[2]),
+                z_hip       = z_hip_right,
                 z_dot_foot  = float(shared_state.right_foot_velocity[2]),
                 q_hip_urdf  = jp.get('Right_Hip_Fowards', 0.0),
                 q_knee_urdf = jp.get('Right_Knee', 0.0),
