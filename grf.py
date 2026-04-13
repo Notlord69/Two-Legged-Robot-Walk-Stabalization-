@@ -126,6 +126,7 @@ def _clip(joint_name: str, value: float) -> float:
 
 def _compute_leg_correction(
     z_foot: float,
+    z_hip: float,
     z_dot_foot: float,
     q_hip_urdf: float,
     q_knee_urdf: float,
@@ -137,20 +138,22 @@ def _compute_leg_correction(
 ) -> Dict[str, float]:
     """Compute GRF torque corrections for one leg.
 
-    urdf_sign: +1.0 for right (axis=+X), -1.0 for left (axis=-X).
+    z_foot    : foot z in world frame (m), from getLinkState
+    z_hip     : hip link z in world frame (m), from link_positions
+    z_dot_foot: foot z velocity (m/s)
+    urdf_sign : +1.0 for right (axis=+X), -1.0 for left (axis=-X).
     URDF → geometric: θ_geo = urdf_sign * q_urdf
     Geometric → URDF: τ_urdf = urdf_sign * τ_geo
 
     Returns {hip_key: τ, knee_key: τ} — URDF-signed, clipped, gain-scaled.
     """
-    # Convert URDF angles to geometric angles for Jacobian computation
     theta_hip_geo  = urdf_sign * q_hip_urdf
     theta_knee_geo = urdf_sign * q_knee_urdf
 
-    fz = _spring_damper_fz(z_foot, z_dot_foot, k_spring)
+    leg_ext = z_hip - z_foot  # m, actual leg extension; Z_REST at nominal stance
+    fz = _spring_damper_fz(leg_ext, z_dot_foot, k_spring)
     tau_hip_geo, tau_knee_geo = _jacobian_torques(fz, theta_hip_geo, theta_knee_geo)
 
-    # Convert geometric torques back to URDF-signed torques
     tau_hip_urdf  = urdf_sign * tau_hip_geo
     tau_knee_urdf = urdf_sign * tau_knee_geo
 
