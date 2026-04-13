@@ -58,6 +58,7 @@ import gait_planner
 import mission
 from mission import MissionController
 from telemetry import TelemetryThread
+from pose_logger import PoseLogger
 
 
 # ============================================================================
@@ -71,6 +72,9 @@ OVERRUN_LIMIT: float = TARGET_DT      # 10 ms hard ceiling
 
 # Maximum log buffer size (printed at end of run, not during)
 LOG_BUFFER_SIZE: int = 2000
+
+GUI_CONNECT_SETTLE_S: float = 1.0  # s — X-server buffer wait after p.connect(p.GUI) in WSL2
+GUI_SYNC_FPS:         int   = 10   # Hz — GUI mirror rate; lower = less PyBullet mutex pressure
 
 # WBC joint-space PD gains — converts IK angle targets to additive torques.
 # These are tuning parameters, not URDF-derived.
@@ -100,12 +104,13 @@ class HeartbeatController:
     Uses scalar accumulators — zero dynamic allocation."""
 
     __slots__ = (
-        'target_dt', 'cycle_start', 'last_cycle_end',
+        'target_dt', 'strict', 'cycle_start', 'last_cycle_end',
         '_cycle_times', '_violations_count', '_cycle_count',
         '_max_compute', '_min_compute', '_sum_compute', '_sum_sq_compute',
     )
 
-    def __init__(self, target_dt: float = TARGET_DT):
+    def __init__(self, target_dt: float = TARGET_DT, strict: bool = True):
+        self.strict = strict  # False in GUI mode: violations counted but not propagated to shared_state
         self.target_dt = target_dt
         self.cycle_start: float = 0.0
         self.last_cycle_end: float = 0.0
@@ -151,8 +156,11 @@ class HeartbeatController:
 
         if violation:
             self._violations_count += 1
-            shared_state.increment_timing_violations()
-            shared_state.add_error_code(ERR_TIMING_VIOLATION)
+            if self.strict:
+                # Propagate to shared_state only in strict mode — feeds recovery logic.
+                # GUI mode (strict=False) counts internally but never freezes the robot.
+                shared_state.increment_timing_violations()
+                shared_state.add_error_code(ERR_TIMING_VIOLATION)
         else:
             # Hybrid sleep + spin-wait
             remaining = self.target_dt - compute_time
@@ -563,7 +571,9 @@ class GUISyncThread(threading.Thread):
 
             if snapshot is not None:
                 self._mirror_pose(snapshot)
-                p.stepSimulation(physicsClientId=self._gui_client)
+                # p.stepSimulation intentionally removed — GUI client never advances
+                # physics. Removing this eliminates the primary PyBullet mutex contention
+                # that caused >10 ms stalls in the 100 Hz physics loop.
                 self._video_frame_count += 1
 
             elapsed = time.perf_counter() - loop_start
@@ -622,13 +632,13 @@ class Siclo1Controller:
         if use_gui:
             try:
                 self.gui_client = p.connect(p.GUI)
-                time.sleep(1.0)  # X-server buffer — wait for window to appear (WSL)
+                time.sleep(GUI_CONNECT_SETTLE_S)  # X-server buffer — wait for window (WSL2)
                 p.removeAllUserDebugItems(physicsClientId=self.gui_client)  # clear comms pipe before spawn
             except Exception:
                 self.gui_client = None
 
         # 3. Heartbeat
-        self.heartbeat = HeartbeatController(target_dt=TARGET_DT)
+        self.heartbeat = HeartbeatController(target_dt=TARGET_DT, strict=not use_gui)
 
         # 4. World setup
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
@@ -712,6 +722,9 @@ class Siclo1Controller:
         )
         self._telemetry_thread.start()
 
+        # Pose logger — pre-allocated ring, written to disk at shutdown
+        self._pose_logger = PoseLogger(max_cycles=50_000)  # 500 s @ 100 Hz
+
         self._telemetry_thread.log(f"[Siclo1] Initialised (OPTIMISED, URDF-synced)")
         self._telemetry_thread.log(f"  Target freq  : {TARGET_FREQ} Hz")
         self._telemetry_thread.log(f"  Target dt    : {TARGET_DT*1000:.2f} ms")
@@ -727,7 +740,7 @@ class Siclo1Controller:
         # Created before _warmup so _mission is available inside the warmup loop.
         self._mission = MissionController(walk_distance=walk_distance)
 
-        warmup_cycles = 5 if self.use_gui else 50
+        warmup_cycles = 50  # same in GUI and headless — 50 cycles needed for contact confirmation
         self._warmup(warmup_cycles)
         self._telemetry_thread.log(f"  Warmup cycles: {warmup_cycles}")
 
@@ -742,7 +755,7 @@ class Siclo1Controller:
                 gui_client=self.gui_client,
                 gui_robot_id=self._gui_robot_id,
                 joint_list=self.pybullet._joint_list,
-                viz_fps=30,
+                viz_fps=GUI_SYNC_FPS,
                 visualizer=self._visualizer,
                 left_hip_link=self._left_hip_link,
                 right_hip_link=self._right_hip_link,
@@ -908,6 +921,22 @@ class Siclo1Controller:
         # 16. End cycle (deterministic wait)
         violation, comp_time = self.heartbeat.end_cycle()
 
+        # Read base pose once — reused by PoseLogger and _push_gui_snapshot.
+        _base_pos, _base_orn = p.getBasePositionAndOrientation(
+            self.pybullet.robot_id, physicsClientId=self.physics_client)
+
+        # Pose log — zero I/O, single numpy row write
+        self._pose_logger.record(
+            sim_time=shared_state.sim_time,
+            base_pos=_base_pos,
+            base_orn=_base_orn,
+            joint_positions=shared_state.joint_positions,
+            left_force=shared_state.left_foot_force,
+            right_force=shared_state.right_foot_force,
+            stability_status=shared_state.stability_status.value,
+            mission_state=shared_state.mission_state.value,
+        )
+
         # 17. Write telemetry (zero-alloc: reuse scratch row)
         row = shared_state._telem_row
         row[0] = shared_state.sim_time
@@ -930,22 +959,20 @@ class Siclo1Controller:
         # 18. Optional GUI sync (decimated — every viz_decimation cycles)
         if (self._gui_sync_thread is not None and
                 shared_state.cycle_count % self.viz_decimation == 0):
-            self._push_gui_snapshot()
+            self._push_gui_snapshot(_base_pos, _base_orn)
 
         return True
 
     # ------------------------------------------------------------------ #
-    def _push_gui_snapshot(self) -> None:
+    def _push_gui_snapshot(self, base_pos: tuple, base_orn: tuple) -> None:
         """Build a PoseSnapshot from current physics state and push to GUISyncThread.
 
-        Called every viz_decimation cycles from step().  Non-critical — any
-        exception is suppressed so the 100 Hz loop is never interrupted.
+        base_pos, base_orn: pre-read from the DIRECT client in step() — reused
+        here to avoid a duplicate p.getBasePositionAndOrientation call.
         """
         if self._gui_sync_thread is None or self._gui_robot_id < 0:
             return
         try:
-            pos, orn = p.getBasePositionAndOrientation(
-                self.pybullet.robot_id, physicsClientId=self.physics_client)
             joint_states = {
                 jname: (
                     shared_state.joint_positions.get(jname, 0.0),
@@ -954,8 +981,8 @@ class Siclo1Controller:
                 for jname, _ in self.pybullet._joint_list
             }
             snap = PoseSnapshot(
-                base_pos=pos,
-                base_orn=orn,
+                base_pos=base_pos,
+                base_orn=base_orn,
                 joint_states=joint_states,
                 link_positions=dict(shared_state.link_positions),
                 mission_state=shared_state.mission_state,
@@ -1067,6 +1094,14 @@ class Siclo1Controller:
 
     # ------------------------------------------------------------------ #
     def shutdown(self) -> None:
+        # Save pose log to session folder (written once — zero I/O during run)
+        if hasattr(self, '_pose_logger') and hasattr(self, '_telemetry_thread'):
+            try:
+                path = self._pose_logger.save(self._telemetry_thread.session_path)
+                print(f"[Siclo1] Pose log saved: {path}  ({self._pose_logger._idx} frames)")
+            except Exception as exc:
+                print(f"[Siclo1][WARN] Pose log save failed: {exc}")
+
         # Step 1: stop VideoRecorder (disabled — self._recorder is None when off)
         if self._recorder is not None:
             video_path = self._recorder.stop()
