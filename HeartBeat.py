@@ -188,6 +188,25 @@ class HeartbeatController:
 
 # Foot-flat gate — single contact point pitch tolerance
 FLAT_PITCH_THRESHOLD: float = math.radians(7.0)
+
+# Contact force threshold for tick accumulation (matches read_sensors)
+_CONTACT_FORCE_THRESHOLD: float = 5.0  # N, Fz below this is treated as no-contact
+
+
+def _update_contact_ticks(current: int, force: float, threshold: float) -> int:
+    """Decay-based contact tick counter.
+
+    force > threshold  →  current + 1       (accumulate contact evidence)
+    force ≤ threshold  →  max(0, current − 1) (decay: one bad frame costs one tick)
+
+    A single PyBullet GJK glitch decrements by 1 rather than wiping the
+    accumulator.  The foot needs 3 consecutive zero-force frames to fully
+    lose contact confidence, matching the 3-tick confirmation gate in
+    perception.FootContactFSM.
+    """
+    if force > threshold:
+        return current + 1
+    return max(0, current - 1)
 # rad — foot-flat gate for single-contact confirmation.
 # At q=0 the URDF foot sole is parallel to the floor (zero plantar-flexion offset).
 # 7° accepts post-bounce settling (0–6°); rejects tiptoe (>20°) and
@@ -298,6 +317,17 @@ class PyBulletInterface:
         # Freeze iteration order
         self._joint_list = list(self.joint_ids.items())
 
+        # Disable default velocity motors so TORQUE_CONTROL has full authority.
+        # PyBullet loads every joint with an internal velocity motor that fights
+        # TORQUE_CONTROL commands unless zeroed here. Called once at init.
+        for jid in self.joint_ids.values():
+            p.setJointMotorControl2(
+                self.robot_id, jid,
+                controlMode=p.VELOCITY_CONTROL,
+                force=0,
+                physicsClientId=self.pc,
+            )
+
         # Joint map info is logged via TelemetryThread after init
 
     # ------------------------------------------------------------------ #
@@ -332,18 +362,21 @@ class PyBulletInterface:
             jt[jname] = js[3]
 
         # Foot contact forces & Robust Validation (3-tick gate + flat-foot)
-        threshold = 5.0  # Fz noise threshold
-        
+        # Decay-based tick counter: a single zero-force frame decrements by 1
+        # (not a hard reset), preventing PyBullet GJK glitches from collapsing
+        # the support polygon.  See _update_contact_ticks for the exact rule.
+        threshold = _CONTACT_FORCE_THRESHOLD  # N
+
         for foot, link_id in [('left', self.left_foot_link_id), ('right', self.right_foot_link_id)]:
             if link_id is not None:
                 contacts = p.getContactPoints(bodyA=rid, linkIndexA=link_id, physicsClientId=pc)
                 force = sum(c[9] for c in contacts) if contacts else 0.0
-                
+
                 # Sync foot position and velocity from link state
                 link_state = p.getLinkState(rid, link_id, computeLinkVelocity=1, physicsClientId=pc)
                 pos = np.array(link_state[0])
                 vel = np.array(link_state[6])
-                
+
                 if foot == 'left':
                     ss.left_foot_position = pos
                     ss.left_foot_velocity = vel
@@ -352,13 +385,13 @@ class PyBulletInterface:
                     qx, qy, qz, qw = link_state[1]
                     foot_pitch = math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx))))
                     ss.left_foot_pitch = foot_pitch
+                    ss.left_contact_ticks = _update_contact_ticks(
+                        ss.left_contact_ticks, force, threshold)
                     if force > threshold:
-                        ss.left_contact_ticks += 1
                         pts_x = [c[5][0] for c in contacts]
                         ss.left_foot_flat = _compute_foot_flat(pts_x, foot_pitch)
                         ss.left_contact_points = [np.array(c[5]) for c in contacts]
                     else:
-                        ss.left_contact_ticks = 0
                         ss.left_foot_flat = False
                         ss.left_contact_points = []
                 else:
@@ -369,13 +402,13 @@ class PyBulletInterface:
                     qx, qy, qz, qw = link_state[1]
                     foot_pitch = math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx))))
                     ss.right_foot_pitch = foot_pitch
+                    ss.right_contact_ticks = _update_contact_ticks(
+                        ss.right_contact_ticks, force, threshold)
                     if force > threshold:
-                        ss.right_contact_ticks += 1
                         pts_x = [c[5][0] for c in contacts]
                         ss.right_foot_flat = _compute_foot_flat(pts_x, foot_pitch)
                         ss.right_contact_points = [np.array(c[5]) for c in contacts]
                     else:
-                        ss.right_contact_ticks = 0
                         ss.right_foot_flat = False
                         ss.right_contact_points = []
 
@@ -419,6 +452,13 @@ class PyBulletInterface:
                 continue
             # Merge GRF additive correction and clip to URDF effort limit
             merged  = raw_torque + grf_corr.get(jname, 0.0)
+            # NaN guard: _clip_effort is NaN-transparent (Python > / < return False
+            # for NaN), so a NaN torque would reach PyBullet and crash the process.
+            # Zero the joint and emit a warning instead of crashing.
+            if not math.isfinite(merged):
+                print(f"[SANITY] NaN/Inf torque on {jname}: raw={raw_torque} "
+                      f"grf={grf_corr.get(jname, 0.0)} — zeroed to prevent crash")
+                merged = 0.0
             clipped = _clip_effort(jname, merged)
             p.setJointMotorControl2(
                 rid, jid,
@@ -454,9 +494,9 @@ class PoseSnapshot:
 class GUISyncThread(threading.Thread):
     """Daemon thread: mirrors robot pose to GUI client at viz_fps Hz.
 
-    Renders MP4 frames via p.stepSimulation(gui_client) — the only trigger
-    for PyBullet's internal video encoder.  Starts/stops MP4 logging on
-    mission state transitions.  Never called from the 100 Hz hot path.
+    Pure display thread — no recording responsibility.  MP4 recording is
+    handled by VideoRecorder (recorder.py), which uses TinyRenderer and works
+    regardless of whether --gui is active.
     """
 
     daemon = True
@@ -466,34 +506,25 @@ class GUISyncThread(threading.Thread):
         gui_client:     int,
         gui_robot_id:   int,
         joint_list:     list,
-        session_path:   str,
         viz_fps:        int,
-        walk_active:    bool,
         visualizer:     Any,
         left_hip_link:  str,
         right_hip_link: str,
     ) -> None:
         super().__init__(name='GUISyncThread')
-        self._gui_client    = gui_client
-        self._gui_robot_id  = gui_robot_id
-        self._joint_list    = joint_list
-        self._viz_fps       = viz_fps
-        self._walk_active   = walk_active
-        self._visualizer    = visualizer
+        self._gui_client     = gui_client
+        self._gui_robot_id   = gui_robot_id
+        self._joint_list     = joint_list
+        self._viz_fps        = viz_fps
+        self._visualizer     = visualizer
         self._left_hip_link  = left_hip_link
         self._right_hip_link = right_hip_link
 
-        self._video_path: str = os.path.join(session_path, "walk.mp4")
-
         # Slot — one shared PoseSnapshot, protected by a lock
-        self._lock:  threading.Lock             = threading.Lock()
-        self._slot:  Optional[PoseSnapshot]     = None
+        self._lock:  threading.Lock         = threading.Lock()
+        self._slot:  Optional[PoseSnapshot] = None
 
-        # MP4 state
-        self._log_id:  Optional[int]  = None
-        self._prev_mission_state: MissionState  = MissionState.IDLE
-
-        # Frame counter — GIL-safe int read from step()
+        # Frame counter — GIL-safe int read from tests
         self._video_frame_count: int = 0
 
         self._stop_event = threading.Event()
@@ -515,31 +546,14 @@ class GUISyncThread(threading.Thread):
             self._lock.release()
 
     # ------------------------------------------------------------------ #
-    def stop(self) -> dict:
-        """Signal thread to stop. Close any open MP4. Return video metadata.
-
-        Steals _log_id under _lock to prevent a race with _handle_mp4_lifecycle
-        running concurrently on the GUISyncThread.  Must be followed by join()
-        before the caller disconnects the GUI client.
-        """
+    def stop(self) -> None:
+        """Signal thread to stop.  Must be followed by join() before
+        the caller disconnects the GUI client."""
         self._stop_event.set()
-        with self._lock:
-            log_id = self._log_id
-            self._log_id = None
-        if log_id is not None:
-            try:
-                p.stopStateLogging(log_id, physicsClientId=self._gui_client)
-            except Exception:
-                pass
-        return {
-            'video_path':   self._video_path if self._walk_active else None,
-            'video_frames': self._video_frame_count,
-            'video_fps':    self._viz_fps,
-        }
 
     # ------------------------------------------------------------------ #
     def run(self) -> None:
-        """~viz_fps Hz render loop. Mirrors pose, captures MP4 frame, polls mission."""
+        """~viz_fps Hz render loop. Mirrors pose to the GUI window."""
         period = 1.0 / self._viz_fps
         while not self._stop_event.is_set():
             loop_start = time.perf_counter()
@@ -551,8 +565,6 @@ class GUISyncThread(threading.Thread):
                 self._mirror_pose(snapshot)
                 p.stepSimulation(physicsClientId=self._gui_client)
                 self._video_frame_count += 1
-                self._handle_mp4_lifecycle(snapshot)
-                self._prev_mission_state = snapshot.mission_state
 
             elapsed = time.perf_counter() - loop_start
             remaining = period - elapsed
@@ -582,41 +594,6 @@ class GUISyncThread(threading.Thread):
         except Exception:
             pass  # GUI mirror is non-critical
 
-    # ------------------------------------------------------------------ #
-    def _handle_mp4_lifecycle(self, snapshot: PoseSnapshot) -> None:
-        """Start/stop MP4 logging on mission state transitions.
-
-        Edges watched:
-          ANY → RAMP  : start recording (if walk_active and not already recording)
-          ANY → IDLE  : stop recording  (mission completed cleanly)
-          emergency   : stop recording  (safe freeze triggered)
-        Called by run() before updating _prev_mission_state.
-        """
-        if not self._walk_active:
-            return
-
-        prev = self._prev_mission_state
-        curr = snapshot.mission_state
-
-        # Start on RAMP entry
-        if prev != MissionState.RAMP and curr == MissionState.RAMP:
-            if self._log_id is None:
-                self._log_id = p.startStateLogging(
-                    p.STATE_LOGGING_VIDEO_MP4,
-                    self._video_path,
-                    physicsClientId=self._gui_client,
-                )
-
-        # Stop on clean IDLE re-entry or emergency
-        if self._log_id is not None:
-            stop_now = (
-                (prev != MissionState.IDLE and curr == MissionState.IDLE)
-                or snapshot.emergency_stop
-            )
-            if stop_now:
-                p.stopStateLogging(self._log_id, physicsClientId=self._gui_client)
-                self._log_id = None
-
 
 # ============================================================================
 # MAIN CONTROLLER — OPTIMISED
@@ -626,7 +603,8 @@ class Siclo1Controller:
     """100 Hz headless controller with optional decimated GUI."""
 
     def __init__(self, use_gui: bool = False, viz_decimation: int = 10,
-                 walk_distance: float = None):
+                 walk_distance: float = None, argv_command: str = "",
+                 quiet: bool = True):
         if viz_decimation < 1:
             raise ValueError(f"viz_decimation must be >= 1, got {viz_decimation}")
         self.use_gui = use_gui
@@ -634,6 +612,7 @@ class Siclo1Controller:
         self._visualizer = None                    # set after warmup if GUI mode
         self._gui_sync_thread: Optional[GUISyncThread] = None  # set after GUI load
         self._walk_active: bool = (walk_distance is not None)
+        self._quiet: bool = quiet  # suppresses all terminal telemetry output
 
         # 1. Physics client — ALWAYS headless
         self.physics_client = p.connect(p.DIRECT)
@@ -726,7 +705,11 @@ class Siclo1Controller:
         self.shared_state.reset()
 
         # 10. Telemetry consumer thread
-        self._telemetry_thread = TelemetryThread(self.shared_state)
+        self._telemetry_thread = TelemetryThread(
+            self.shared_state,
+            argv_command=argv_command,
+            quiet=quiet,
+        )
         self._telemetry_thread.start()
 
         self._telemetry_thread.log(f"[Siclo1] Initialised (OPTIMISED, URDF-synced)")
@@ -753,20 +736,29 @@ class Siclo1Controller:
             from viz.debug_markers import DebugVisualizer
             self._visualizer = DebugVisualizer(self.gui_client)
 
-        # 11. GUISyncThread — owns GUI rendering and MP4 recording
+        # 11. GUISyncThread — display only (no recording)
         if self.gui_client is not None and self._gui_robot_id >= 0:
             self._gui_sync_thread = GUISyncThread(
                 gui_client=self.gui_client,
                 gui_robot_id=self._gui_robot_id,
                 joint_list=self.pybullet._joint_list,
-                session_path=self._telemetry_thread.session_path,
                 viz_fps=30,
-                walk_active=self._walk_active,
                 visualizer=self._visualizer,
                 left_hip_link=self._left_hip_link,
                 right_hip_link=self._right_hip_link,
             )
             self._gui_sync_thread.start()
+
+        # 12. VideoRecorder — disabled temporarily
+        VIDEO_LOGGING_ENABLED = False  # set True to re-enable MP4 recording
+        self._recorder = None
+        if VIDEO_LOGGING_ENABLED:
+            from recorder import VideoRecorder
+            self._recorder = VideoRecorder(
+                physics_client=self.physics_client,
+                session_path=self._telemetry_thread.session_path,
+            )
+            self._recorder.start()
 
     # ------------------------------------------------------------------ #
     def _wbc_step(self) -> None:
@@ -776,7 +768,7 @@ class Siclo1Controller:
         Computes PD torque for each leg joint and adds to shared_state.target_torques.
         GRF corrections are NOT merged here — handled in apply_control().
         """
-        torques = getattr(shared_state, 'target_torques', {})
+        torques = {}   # reset each cycle; GRF corrections are merged in apply_control
 
         jp = shared_state.joint_positions
         jv = shared_state.joint_velocities
@@ -802,10 +794,16 @@ class Siclo1Controller:
         """Run full control pipeline for N cycles without real-time timing.
 
         Lets the robot settle under gravity before the 100 Hz loop starts.
-        Gait commands are not issued (no gait planner integrated yet).
         The 10 ms timing guard does NOT apply here.
+
+        If a walk distance is set, a second pass runs (up to 300 extra cycles)
+        until ramp_gain reaches 1.0.  This ensures:
+          - contact confirmation completes before the real-time loop
+          - gait_planner IK is primed to proper stance angles (not the 0,0,0
+            IDLE default) so the first real-time cycle sees no IK step-change
+          - ramp_gain = 1.0 at loop entry → DS gate passes immediately
         """
-        for _ in range(cycles):
+        def _run_one_cycle() -> None:
             self.pybullet.read_sensors()
             self.pybullet.update_link_positions()
             perception.update_perception()
@@ -818,6 +816,18 @@ class Siclo1Controller:
             recovery.update_recovery()
             self.pybullet.apply_control()
             sim.interface.step_simulation(self.physics_client)
+
+        for _ in range(cycles):
+            _run_one_cycle()
+
+        # Extended pass: drain RAMP to completion before entering real-time loop.
+        # Only runs when a walk distance is commanded.  Capped at 300 cycles
+        # (~3 s of simulated time) as a safety guard.
+        if self._mission.walk_distance is not None:
+            for _ in range(300):  # 300 cycles max guard
+                if shared_state.ramp_gain >= 1.0:
+                    break
+                _run_one_cycle()
 
     # ------------------------------------------------------------------ #
     def step(self) -> bool:
@@ -840,6 +850,7 @@ class Siclo1Controller:
         """
         # 1.
         self.heartbeat.start_cycle()
+        shared_state.timing_violation_this_cycle = False  # reset per-cycle overrun flag
 
         # 2. Sensors
         self.pybullet.read_sensors()
@@ -860,6 +871,7 @@ class Siclo1Controller:
         elapsed = time.perf_counter() - self.heartbeat.cycle_start
         if elapsed > OVERRUN_LIMIT:
             shared_state.add_error_code(ERR_MID_CYCLE_OVERRUN)
+            shared_state.timing_violation_this_cycle = True  # gate gait_planner this cycle
 
         # 6. Active balance
         active_balance.update_active_balance()
@@ -996,7 +1008,8 @@ class Siclo1Controller:
                     f"[STOPPED] t={shared_state.sim_time:.2f}s")
                 break
 
-        self._print_final_summary()
+        if not self._quiet:
+            self._print_final_summary()
 
     # ------------------------------------------------------------------ #
     def finalize_telemetry(self) -> None:
@@ -1054,25 +1067,30 @@ class Siclo1Controller:
 
     # ------------------------------------------------------------------ #
     def shutdown(self) -> None:
-        # Step 1: stop GUI sync thread and wait for MP4 flush BEFORE disconnect.
-        # p.disconnect() invalidates the C++ encoder handle — join first or the
-        # file is silently truncated.
-        if self._gui_sync_thread is not None and self._gui_sync_thread.is_alive():
-            meta = self._gui_sync_thread.stop()
-            self._gui_sync_thread.join(timeout=5.0)  # 5 s: allow encoder flush
-            if self._gui_sync_thread.is_alive():
-                print("[WARN] GUISyncThread did not exit within 5 s — "
+        # Step 1: stop VideoRecorder (disabled — self._recorder is None when off)
+        if self._recorder is not None:
+            video_path = self._recorder.stop()
+            self._recorder.join(timeout=5.0)
+            if self._recorder.is_alive():
+                print("[WARN] VideoRecorder did not exit within 5 s — "
                       "walk.mp4 may be truncated")
-            elif meta.get('video_path') and not os.path.isfile(meta['video_path']):
-                print(f"[WARN] walk.mp4 expected at {meta['video_path']} "
-                      "but file not found after flush")
+            elif not os.path.isfile(video_path):
+                print(f"[WARN] walk.mp4 expected at {video_path} but not found after flush")
+            else:
+                print(f"[INFO] walk.mp4 saved: {video_path} "
+                      f"({self._recorder.frame_count} frames)")
 
-        # Step 2: stop telemetry thread.
+        # Step 2: stop GUI sync thread.
+        if self._gui_sync_thread is not None and self._gui_sync_thread.is_alive():
+            self._gui_sync_thread.stop()
+            self._gui_sync_thread.join(timeout=2.0)
+
+        # Step 3: stop telemetry thread.
         if self._telemetry_thread.is_alive():
             self._telemetry_thread.stop()
             self._telemetry_thread.join(timeout=2.0)
 
-        # Step 3: disconnect physics clients — safe now that threads are done.
+        # Step 4: disconnect physics clients — safe now that threads are done.
         try:
             p.disconnect(physicsClientId=self.physics_client)
         except Exception:
