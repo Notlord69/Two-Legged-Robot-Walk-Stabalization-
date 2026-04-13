@@ -70,21 +70,29 @@ B_DAMPER: float = 94.0     # N·s/m, ζ=0.7 critical damping ratio for impact ab
 # DECEL boost: increase K_SPRING by 20% to absorb stopping impulse
 DECEL_SPRING_BOOST: float = 1.2   # dimensionless, applied to K_SPRING in DECEL state
 
+ROBOT_MASS:   float = 8.0                       # kg, total robot mass (URDF-derived)
+GRAVITY_COMP: float = ROBOT_MASS * 9.81 / 2.0   # N·per·leg, feedforward at standing
+
 
 # ============================================================================
 # INTERNAL HELPERS
 # ============================================================================
 
-def _spring_damper_fz(z_foot: float, z_dot_foot: float,
+def _spring_damper_fz(leg_ext: float, z_dot_foot: float,
                       k_spring: float) -> float:
     """Compute desired vertical support force via virtual spring-damper.
 
-    z_foot    : foot z position in world frame (m)
-    z_dot_foot: foot z velocity in world frame (m/s)
-    k_spring  : spring constant to use (N/m) — may be boosted for DECEL
+    leg_ext   : z_hip - z_foot (m); equals Z_REST at nominal standing posture.
+                Positive = leg extended; negative = impossible geometry.
+    z_dot_foot: foot z velocity in world frame (m/s), positive = moving up
+    k_spring  : spring constant (N/m) — may be boosted for DECEL
     Returns F_z (N), positive = upward support.
+
+    At equilibrium (leg_ext == Z_REST): F_z = GRAVITY_COMP (half body-weight).
+    Compression (leg_ext < Z_REST): F_z > GRAVITY_COMP (extra support).
+    Extension  (leg_ext > Z_REST): F_z < GRAVITY_COMP (less support).
     """
-    return k_spring * (Z_REST - z_foot) - B_DAMPER * z_dot_foot
+    return GRAVITY_COMP + k_spring * (Z_REST - leg_ext) - B_DAMPER * z_dot_foot
 
 
 def _jacobian_torques(fz: float,
