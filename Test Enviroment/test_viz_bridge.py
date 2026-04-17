@@ -92,3 +92,61 @@ class TestPushPose:
         bridge.push_pose((0.0, 0.0, 0.88), (0.0, 0.0, 0.0, 1.0),
                          {j: 0.0 for j in JOINT_NAMES})
         assert time.perf_counter() - t0 < 0.001  # < 1 ms
+
+
+class TestLifecycle:
+    def test_start_timeout_sets_inactive(self):
+        """If subprocess never signals ready, _active stays False."""
+        from sim.viz_bridge import VizBridge
+        from unittest.mock import MagicMock, patch
+
+        b = VizBridge(['Left_Hip_Forwards'], '/fake/path.urdf')
+        mock_proc = MagicMock()
+        mock_proc.is_alive.return_value = True
+
+        ctx_mock = MagicMock()
+        ctx_mock.Process.return_value = mock_proc
+
+        with patch('sim.viz_bridge.multiprocessing.get_context', return_value=ctx_mock):
+            # _timeout=0.01 → 10 ms timeout; arr[0] stays -1 → never ready
+            b.start(_timeout=0.01)
+
+        assert b._active is False
+        b.stop()
+
+    def test_stop_unlinks_shm(self):
+        """stop() must unlink shared memory so it can't be re-opened by name."""
+        from sim.viz_bridge import VizBridge
+        from multiprocessing.shared_memory import SharedMemory
+
+        b = VizBridge(['Left_Hip_Forwards'], '/fake/path.urdf')
+        shm_name = b._shm.name
+        b.stop()
+
+        with pytest.raises(Exception):
+            SharedMemory(name=shm_name)
+
+    def test_is_alive_false_after_stop(self):
+        from sim.viz_bridge import VizBridge
+        from unittest.mock import MagicMock
+
+        b = VizBridge(['Left_Hip_Forwards'], '/fake/path.urdf')
+        mock_proc = MagicMock()
+        mock_proc.is_alive.return_value = False
+        b._process = mock_proc
+        b._active = True
+        b.stop()
+
+        assert b.is_alive is False
+
+    def test_is_alive_true_when_process_running(self):
+        from sim.viz_bridge import VizBridge
+        from unittest.mock import MagicMock
+
+        b = VizBridge(['Left_Hip_Forwards'], '/fake/path.urdf')
+        mock_proc = MagicMock()
+        mock_proc.is_alive.return_value = True
+        b._process = mock_proc
+
+        assert b.is_alive is True
+        b.stop()
