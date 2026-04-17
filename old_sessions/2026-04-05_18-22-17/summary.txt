@@ -1,9 +1,0 @@
-Session: 2026-04-05_18-22-17
-Total cycles   : 0
-Analyzed cycles: 0  (warmup excluded: 50)
-
-[TIMING]
-  No analyzed cycles (run ended before warmup completed)
-
-[ERRORS]
-  Coded errors in ring: 0
