@@ -7,7 +7,7 @@ Analyzed cycles: 950  (warmup excluded: 50)
   Std dev      : 0.510 ms
   Min          : 0.919 ms
   Max          : 4.140 ms
-  Jitter       : 0.510 ms
+  Jitter       : 0.510 mspy
   Violations   : 0  (0.0%)
   Status       : PASS
 

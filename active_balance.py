@@ -406,7 +406,12 @@ class ActiveBalanceController:
 
     def _write_to_shared_state(self, torques, cp, lateral_error, mode):
         shared_state.target_torques      = torques
-        shared_state.capture_point       = cp
+        # Do NOT overwrite shared_state.capture_point here.
+        # stability.py (step 4 in pipeline) writes the authoritative 2D CP using
+        # both X and Y velocity components.  active_balance only computed the X
+        # component correctly (Y was set to com_pos[1] rather than com_y + vy/ω).
+        # Preserving stability's value ensures gait_planner reads the correct CP.
+        self.capture_point               = cp   # instance attribute — used for diagnostics
         shared_state.lateral_error       = lateral_error
         self.active_mode                 = mode
         shared_state.active_balance_mode = mode

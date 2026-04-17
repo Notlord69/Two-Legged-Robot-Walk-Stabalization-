@@ -37,6 +37,7 @@ Date: April 2026
 ================================================================================
 """
 
+import math
 import numpy as np
 
 import kinematics
@@ -85,12 +86,20 @@ _RIGHT_HIP_LINK: str = "Right_Upper_Leg_1"
 # ============================================================================
 
 def _swing_z(phi: float) -> float:
-    """Parabolic foot height during swing.
+    """Cycloidal foot height during swing.
 
     phi: normalized swing phase ∈ [0, 1]
     Returns z_foot (m) above ground; 0 at start and end, SWING_HEIGHT at mid.
+
+    Uses cycloidal profile: z = H*(1 - cos(2π·φ))/2
+    Velocity dz/dt = 0 at both endpoints — zero impact velocity at touchdown and
+    zero yank at liftoff.  The old parabolic profile (4·H·φ·(1-φ)) had
+    ±0.4 m/s at the endpoints (±4·H/SWING_DURATION), which drove an impact
+    spike on every foot contact.
+
+    Boundary check (float-exact): z(0)=0, z(0.5)=H, z(1)=0.
     """
-    return SWING_HEIGHT * 4.0 * phi * (1.0 - phi)
+    return SWING_HEIGHT * (1.0 - math.cos(2.0 * math.pi * phi)) / 2.0
 
 
 def _compute_x_target(capture_point_x: float, decel: bool = False) -> float:

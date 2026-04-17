@@ -153,7 +153,9 @@ def replay(
                         physicsClientId=client,
                     )
 
-            p.stepSimulation(physicsClientId=client)
+            # No stepSimulation here — joints are teleported via resetJointState
+            # with zero velocity. Stepping physics would let gravity/dynamics
+            # corrupt the pose before the next frame arrives.
 
             elapsed   = time.perf_counter() - t_frame
             remaining = frame_dt - elapsed
