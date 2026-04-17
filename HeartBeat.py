@@ -47,6 +47,7 @@ from shared_state import (
     DEFAULT_LINK_DATA,
     ERR_TIMING_VIOLATION,
     ERR_MID_CYCLE_OVERRUN,
+    STAGE_NAMES,
 )
 import sim.interface
 import perception
@@ -58,7 +59,6 @@ import gait_planner
 import mission
 from mission import MissionController
 from telemetry import TelemetryThread
-from pose_logger import PoseLogger
 
 
 # ============================================================================
@@ -72,9 +72,6 @@ OVERRUN_LIMIT: float = TARGET_DT      # 10 ms hard ceiling
 
 # Maximum log buffer size (printed at end of run, not during)
 LOG_BUFFER_SIZE: int = 2000
-
-GUI_CONNECT_SETTLE_S: float = 1.0  # s — X-server buffer wait after p.connect(p.GUI) in WSL2
-GUI_SYNC_FPS:         int   = 10   # Hz — GUI mirror rate; lower = less PyBullet mutex pressure
 
 # WBC joint-space PD gains — converts IK angle targets to additive torques.
 # These are tuning parameters, not URDF-derived.
@@ -104,13 +101,12 @@ class HeartbeatController:
     Uses scalar accumulators — zero dynamic allocation."""
 
     __slots__ = (
-        'target_dt', 'strict', 'cycle_start', 'last_cycle_end',
+        'target_dt', 'cycle_start', 'last_cycle_end',
         '_cycle_times', '_violations_count', '_cycle_count',
         '_max_compute', '_min_compute', '_sum_compute', '_sum_sq_compute',
     )
 
-    def __init__(self, target_dt: float = TARGET_DT, strict: bool = True):
-        self.strict = strict  # False in GUI mode: violations counted but not propagated to shared_state
+    def __init__(self, target_dt: float = TARGET_DT):
         self.target_dt = target_dt
         self.cycle_start: float = 0.0
         self.last_cycle_end: float = 0.0
@@ -156,11 +152,8 @@ class HeartbeatController:
 
         if violation:
             self._violations_count += 1
-            if self.strict:
-                # Propagate to shared_state only in strict mode — feeds recovery logic.
-                # GUI mode (strict=False) counts internally but never freezes the robot.
-                shared_state.increment_timing_violations()
-                shared_state.add_error_code(ERR_TIMING_VIOLATION)
+            shared_state.increment_timing_violations()
+            shared_state.add_error_code(ERR_TIMING_VIOLATION)
         else:
             # Hybrid sleep + spin-wait
             remaining = self.target_dt - compute_time
@@ -324,17 +317,6 @@ class PyBulletInterface:
 
         # Freeze iteration order
         self._joint_list = list(self.joint_ids.items())
-
-        # Disable default velocity motors so TORQUE_CONTROL has full authority.
-        # PyBullet loads every joint with an internal velocity motor that fights
-        # TORQUE_CONTROL commands unless zeroed here. Called once at init.
-        for jid in self.joint_ids.values():
-            p.setJointMotorControl2(
-                self.robot_id, jid,
-                controlMode=p.VELOCITY_CONTROL,
-                force=0,
-                physicsClientId=self.pc,
-            )
 
         # Joint map info is logged via TelemetryThread after init
 
@@ -571,9 +553,7 @@ class GUISyncThread(threading.Thread):
 
             if snapshot is not None:
                 self._mirror_pose(snapshot)
-                # p.stepSimulation intentionally removed — GUI client never advances
-                # physics. Removing this eliminates the primary PyBullet mutex contention
-                # that caused >10 ms stalls in the 100 Hz physics loop.
+                p.stepSimulation(physicsClientId=self._gui_client)
                 self._video_frame_count += 1
 
             elapsed = time.perf_counter() - loop_start
@@ -632,13 +612,13 @@ class Siclo1Controller:
         if use_gui:
             try:
                 self.gui_client = p.connect(p.GUI)
-                time.sleep(GUI_CONNECT_SETTLE_S)  # X-server buffer — wait for window (WSL2)
+                time.sleep(1.0)  # X-server buffer — wait for window to appear (WSL)
                 p.removeAllUserDebugItems(physicsClientId=self.gui_client)  # clear comms pipe before spawn
             except Exception:
                 self.gui_client = None
 
         # 3. Heartbeat
-        self.heartbeat = HeartbeatController(target_dt=TARGET_DT, strict=not use_gui)
+        self.heartbeat = HeartbeatController(target_dt=TARGET_DT)
 
         # 4. World setup
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
@@ -722,9 +702,6 @@ class Siclo1Controller:
         )
         self._telemetry_thread.start()
 
-        # Pose logger — pre-allocated ring, written to disk at shutdown
-        self._pose_logger = PoseLogger(max_cycles=50_000)  # 500 s @ 100 Hz
-
         self._telemetry_thread.log(f"[Siclo1] Initialised (OPTIMISED, URDF-synced)")
         self._telemetry_thread.log(f"  Target freq  : {TARGET_FREQ} Hz")
         self._telemetry_thread.log(f"  Target dt    : {TARGET_DT*1000:.2f} ms")
@@ -740,7 +717,7 @@ class Siclo1Controller:
         # Created before _warmup so _mission is available inside the warmup loop.
         self._mission = MissionController(walk_distance=walk_distance)
 
-        warmup_cycles = 50  # same in GUI and headless — 50 cycles needed for contact confirmation
+        warmup_cycles = 5 if self.use_gui else 50
         self._warmup(warmup_cycles)
         self._telemetry_thread.log(f"  Warmup cycles: {warmup_cycles}")
 
@@ -755,7 +732,7 @@ class Siclo1Controller:
                 gui_client=self.gui_client,
                 gui_robot_id=self._gui_robot_id,
                 joint_list=self.pybullet._joint_list,
-                viz_fps=GUI_SYNC_FPS,
+                viz_fps=30,
                 visualizer=self._visualizer,
                 left_hip_link=self._left_hip_link,
                 right_hip_link=self._right_hip_link,
@@ -781,7 +758,7 @@ class Siclo1Controller:
         Computes PD torque for each leg joint and adds to shared_state.target_torques.
         GRF corrections are NOT merged here — handled in apply_control().
         """
-        torques = {}   # reset each cycle; GRF corrections are merged in apply_control
+        torques = getattr(shared_state, 'target_torques', {})
 
         jp = shared_state.joint_positions
         jv = shared_state.joint_velocities
@@ -807,16 +784,10 @@ class Siclo1Controller:
         """Run full control pipeline for N cycles without real-time timing.
 
         Lets the robot settle under gravity before the 100 Hz loop starts.
+        Gait commands are not issued (no gait planner integrated yet).
         The 10 ms timing guard does NOT apply here.
-
-        If a walk distance is set, a second pass runs (up to 300 extra cycles)
-        until ramp_gain reaches 1.0.  This ensures:
-          - contact confirmation completes before the real-time loop
-          - gait_planner IK is primed to proper stance angles (not the 0,0,0
-            IDLE default) so the first real-time cycle sees no IK step-change
-          - ramp_gain = 1.0 at loop entry → DS gate passes immediately
         """
-        def _run_one_cycle() -> None:
+        for _ in range(cycles):
             self.pybullet.read_sensors()
             self.pybullet.update_link_positions()
             perception.update_perception()
@@ -829,18 +800,6 @@ class Siclo1Controller:
             recovery.update_recovery()
             self.pybullet.apply_control()
             sim.interface.step_simulation(self.physics_client)
-
-        for _ in range(cycles):
-            _run_one_cycle()
-
-        # Extended pass: drain RAMP to completion before entering real-time loop.
-        # Only runs when a walk distance is commanded.  Capped at 300 cycles
-        # (~3 s of simulated time) as a safety guard.
-        if self._mission.walk_distance is not None:
-            for _ in range(300):  # 300 cycles max guard
-                if shared_state.ramp_gain >= 1.0:
-                    break
-                _run_one_cycle()
 
     # ------------------------------------------------------------------ #
     def step(self) -> bool:
@@ -867,39 +826,48 @@ class Siclo1Controller:
 
         # 2. Sensors
         self.pybullet.read_sensors()
+        shared_state._stage_times[0] = time.perf_counter() - self.heartbeat.cycle_start
 
         if shared_state.freeze_robot:
             return False
 
         # 3. Link positions → avoids FK fallback
         self.pybullet.update_link_positions()
+        shared_state._stage_times[1] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 4. Perception
         perception.update_perception()
+        shared_state._stage_times[2] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 5. Stability
         stability.update_stability(dt=TARGET_DT)
+        shared_state._stage_times[3] = time.perf_counter() - self.heartbeat.cycle_start
 
         # ── TIMING GUARD (mid-cycle) ────────────────────────────────────
         elapsed = time.perf_counter() - self.heartbeat.cycle_start
         if elapsed > OVERRUN_LIMIT:
             shared_state.add_error_code(ERR_MID_CYCLE_OVERRUN)
-            shared_state.timing_violation_this_cycle = True  # gate gait_planner this cycle
+            shared_state.timing_violation_this_cycle = True
 
         # 6. Active balance
         active_balance.update_active_balance()
+        shared_state._stage_times[4] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 7. GRF — virtual spring-damper torque corrections
         grf.update_grf()
+        shared_state._stage_times[5] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 8. Gait Planner — swing arc + IK angle targets
         gait_planner.update_gait_planner()
+        shared_state._stage_times[6] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 9. Mission — state machine, ramp_gain, step counting
         self._mission.update()
+        shared_state._stage_times[7] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 10. WBC — IK angles → additive joint PD torques
         self._wbc_step()
+        shared_state._stage_times[8] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 11. Emergency gate
         if shared_state.emergency_stop_triggered:
@@ -907,12 +875,15 @@ class Siclo1Controller:
 
         # 12. Recovery
         recovery.update_recovery()
+        shared_state._stage_times[9] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 13. Control
         self.pybullet.apply_control()
+        shared_state._stage_times[10] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 14. Physics step — DIRECT only (no render stall)
         sim.interface.step_simulation(self.physics_client)
+        shared_state._stage_times[11] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 15. Advance counters
         shared_state.cycle_count += 1
@@ -921,21 +892,21 @@ class Siclo1Controller:
         # 16. End cycle (deterministic wait)
         violation, comp_time = self.heartbeat.end_cycle()
 
-        # Read base pose once — reused by PoseLogger and _push_gui_snapshot.
-        _base_pos, _base_orn = p.getBasePositionAndOrientation(
-            self.pybullet.robot_id, physicsClientId=self.physics_client)
-
-        # Pose log — zero I/O, single numpy row write
-        self._pose_logger.record(
-            sim_time=shared_state.sim_time,
-            base_pos=_base_pos,
-            base_orn=_base_orn,
-            joint_positions=shared_state.joint_positions,
-            left_force=shared_state.left_foot_force,
-            right_force=shared_state.right_foot_force,
-            stability_status=shared_state.stability_status.value,
-            mission_state=shared_state.mission_state.value,
-        )
+        # Per-stage worst logging (text buffer only — CSV schema unchanged)
+        _prev = 0.0
+        _worst_ms = 0.0
+        _worst_stage = ''
+        for _i in range(12):
+            _t = shared_state._stage_times[_i]
+            _delta = (_t - _prev) * 1000.0
+            if _delta > _worst_ms:
+                _worst_ms = _delta
+                _worst_stage = STAGE_NAMES[_i]
+            _prev = _t
+        if _worst_ms > 3.0:
+            self._telemetry_thread.log(
+                f"[STAGE] worst={_worst_stage}  {_worst_ms:.2f} ms"
+            )
 
         # 17. Write telemetry (zero-alloc: reuse scratch row)
         row = shared_state._telem_row
@@ -959,20 +930,22 @@ class Siclo1Controller:
         # 18. Optional GUI sync (decimated — every viz_decimation cycles)
         if (self._gui_sync_thread is not None and
                 shared_state.cycle_count % self.viz_decimation == 0):
-            self._push_gui_snapshot(_base_pos, _base_orn)
+            self._push_gui_snapshot()
 
         return True
 
     # ------------------------------------------------------------------ #
-    def _push_gui_snapshot(self, base_pos: tuple, base_orn: tuple) -> None:
+    def _push_gui_snapshot(self) -> None:
         """Build a PoseSnapshot from current physics state and push to GUISyncThread.
 
-        base_pos, base_orn: pre-read from the DIRECT client in step() — reused
-        here to avoid a duplicate p.getBasePositionAndOrientation call.
+        Called every viz_decimation cycles from step().  Non-critical — any
+        exception is suppressed so the 100 Hz loop is never interrupted.
         """
         if self._gui_sync_thread is None or self._gui_robot_id < 0:
             return
         try:
+            pos, orn = p.getBasePositionAndOrientation(
+                self.pybullet.robot_id, physicsClientId=self.physics_client)
             joint_states = {
                 jname: (
                     shared_state.joint_positions.get(jname, 0.0),
@@ -981,8 +954,8 @@ class Siclo1Controller:
                 for jname, _ in self.pybullet._joint_list
             }
             snap = PoseSnapshot(
-                base_pos=base_pos,
-                base_orn=base_orn,
+                base_pos=pos,
+                base_orn=orn,
                 joint_states=joint_states,
                 link_positions=dict(shared_state.link_positions),
                 mission_state=shared_state.mission_state,
@@ -1094,14 +1067,6 @@ class Siclo1Controller:
 
     # ------------------------------------------------------------------ #
     def shutdown(self) -> None:
-        # Save pose log to session folder (written once — zero I/O during run)
-        if hasattr(self, '_pose_logger') and hasattr(self, '_telemetry_thread'):
-            try:
-                path = self._pose_logger.save(self._telemetry_thread.session_path)
-                print(f"[Siclo1] Pose log saved: {path}  ({self._pose_logger._idx} frames)")
-            except Exception as exc:
-                print(f"[Siclo1][WARN] Pose log save failed: {exc}")
-
         # Step 1: stop VideoRecorder (disabled — self._recorder is None when off)
         if self._recorder is not None:
             video_path = self._recorder.stop()
