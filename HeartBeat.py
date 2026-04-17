@@ -102,13 +102,14 @@ class HeartbeatController:
     Uses scalar accumulators — zero dynamic allocation."""
 
     __slots__ = (
-        'target_dt', 'cycle_start', 'last_cycle_end',
+        'target_dt', 'strict', 'cycle_start', 'last_cycle_end',
         '_cycle_times', '_violations_count', '_cycle_count',
         '_max_compute', '_min_compute', '_sum_compute', '_sum_sq_compute',
     )
 
-    def __init__(self, target_dt: float = TARGET_DT):
+    def __init__(self, target_dt: float = TARGET_DT, strict: bool = True):
         self.target_dt = target_dt
+        self.strict    = strict   # False → count internally but skip shared_state writes
         self.cycle_start: float = 0.0
         self.last_cycle_end: float = 0.0
         self._cycle_count: int = 0
@@ -153,8 +154,9 @@ class HeartbeatController:
 
         if violation:
             self._violations_count += 1
-            shared_state.increment_timing_violations()
-            shared_state.add_error_code(ERR_TIMING_VIOLATION)
+            if self.strict:
+                shared_state.increment_timing_violations()
+                shared_state.add_error_code(ERR_TIMING_VIOLATION)
         else:
             # Hybrid sleep + spin-wait
             remaining = self.target_dt - compute_time

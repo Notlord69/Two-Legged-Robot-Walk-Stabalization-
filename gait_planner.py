@@ -69,8 +69,8 @@ PLACE_TIMEOUT:         float = 0.5    # s, PLACE timeout → conditional
 
 # Physical thresholds
 SWING_UNLOAD_THRESHOLD: float = 5.0    # N, swing foot considered empty below this
-STANCE_LOAD_THRESHOLD:  float = 60.0   # N, ~77% of 78 N body weight; stance must carry
-                                        #    this before LIFT is permitted
+STANCE_LOAD_THRESHOLD:  float = 5.0    # N, minimum stance force to confirm ground contact;
+                                        #    guards against GJK glitch (F=0 on both feet)
 FORCE_BALANCE_RATIO:    float = 2.0    # dimensionless, max allowed ratio max(F)/min(F) at DS→COM_SHIFT
 FORCE_BALANCE_FLOOR:    float = 10.0   # N, minimum per-foot force before ratio check applies
 SETTLE_VEL_THRESHOLD:   float = 0.05   # m/s, foot considered settled below this

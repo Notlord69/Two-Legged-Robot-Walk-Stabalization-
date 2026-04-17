@@ -18,3 +18,9 @@ __pycache__/
 *.pyc
 .claude/
 
+
+#testing
+old_sessions/
+sessions/
+Test_Enviroment/
+

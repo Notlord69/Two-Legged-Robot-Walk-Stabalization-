@@ -55,8 +55,9 @@ class DebugVisualizer:
     Call update() from _sync_gui() every render tick.
     """
 
-    def __init__(self, physics_client: int):
+    def __init__(self, physics_client: int, warmup_cycles: int = _VISUAL_SILENCE):
         self._pc = physics_client
+        self._warmup_cycles: int = warmup_cycles
         self._cycle_count: int = 0              # guards Visual Silence window
         # Arc segment IDs: 4 arcs × _ARC_SEGS segments each
         # Order: L_Rmin, L_Rmax, R_Rmin, R_Rmax
@@ -75,7 +76,7 @@ class DebugVisualizer:
         right_hip: world pos of right hip-pitch joint (m)
         """
         self._cycle_count += 1
-        if self._cycle_count < _VISUAL_SILENCE:
+        if self._cycle_count <= self._warmup_cycles:
             return  # buffer protection: wait for URDF to fully render
 
         self._update_annulus(left_hip, right_hip)
