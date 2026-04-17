@@ -14,6 +14,7 @@ import argparse
 import sys
 import time
 import pybullet as p
+import sim.interface
 from HeartBeat import Siclo1Controller
 
 
@@ -64,16 +65,16 @@ def main(argv=None) -> None:
         controller.finalize_telemetry()
 
         if args.hold:
-            if controller.gui_client is not None:
+            if controller._viz_bridge is not None and controller._viz_bridge.is_alive:
                 print("[Siclo1] --hold active. Inspect final pose. Ctrl-C to exit.")
                 try:
-                    while p.isConnected(physicsClientId=controller.gui_client):
-                        p.stepSimulation(physicsClientId=controller.physics_client)
-                        time.sleep(0.01)  # 100 Hz physics keep; non-blocking GUI
+                    while controller._viz_bridge.is_alive:
+                        sim.interface.step_simulation(controller.physics_client)
+                        time.sleep(0.01)
                 except KeyboardInterrupt:
                     print("\n[Siclo1] Hold ended.")
             else:
-                print("[Siclo1] --hold ignored: no GUI client active (use --gui)")
+                print("[Siclo1] --hold ignored: no GUI active (use --gui)")
 
         controller.shutdown()
 

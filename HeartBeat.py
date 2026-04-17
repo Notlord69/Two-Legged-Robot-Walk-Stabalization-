@@ -29,6 +29,7 @@ import time
 import threading
 import math
 from dataclasses import dataclass
+from sim.viz_bridge import VizBridge
 from typing import Optional, Tuple, Dict, Any
 
 import numpy as np
@@ -459,133 +460,6 @@ class PyBulletInterface:
 
 
 # ============================================================================
-# POSE SNAPSHOT  — immutable robot state for GUI thread handoff
-# ============================================================================
-
-@dataclass
-class PoseSnapshot:
-    """Frozen robot state written by the 100 Hz loop; read by GUISyncThread.
-
-    One slot shared between producer and consumer.
-    Producer writes at 100 Hz (non-blocking); consumer reads at viz_fps Hz.
-    """
-    base_pos:       tuple        # (x, y, z) world position
-    base_orn:       tuple        # quaternion (x, y, z, w)
-    joint_states:   dict         # {joint_name: (position_rad, velocity_rad_s)}
-    link_positions: dict         # {link_name: [x, y, z]} for DebugVisualizer
-    mission_state:  MissionState
-    emergency_stop: bool
-
-
-# ============================================================================
-# GUI SYNC THREAD  — owns gui_client after init; decouples V-Sync from 100 Hz
-# ============================================================================
-
-class GUISyncThread(threading.Thread):
-    """Daemon thread: mirrors robot pose to GUI client at viz_fps Hz.
-
-    Pure display thread — no recording responsibility.  MP4 recording is
-    handled by VideoRecorder (recorder.py), which uses TinyRenderer and works
-    regardless of whether --gui is active.
-    """
-
-    daemon = True
-
-    def __init__(
-        self,
-        gui_client:     int,
-        gui_robot_id:   int,
-        joint_list:     list,
-        viz_fps:        int,
-        visualizer:     Any,
-        left_hip_link:  str,
-        right_hip_link: str,
-    ) -> None:
-        super().__init__(name='GUISyncThread')
-        self._gui_client     = gui_client
-        self._gui_robot_id   = gui_robot_id
-        self._joint_list     = joint_list
-        self._viz_fps        = viz_fps
-        self._visualizer     = visualizer
-        self._left_hip_link  = left_hip_link
-        self._right_hip_link = right_hip_link
-
-        # Slot — one shared PoseSnapshot, protected by a lock
-        self._lock:  threading.Lock         = threading.Lock()
-        self._slot:  Optional[PoseSnapshot] = None
-
-        # Frame counter — GIL-safe int read from tests
-        self._video_frame_count: int = 0
-
-        self._stop_event = threading.Event()
-
-        # Prevent GUI client from self-advancing time
-        p.setRealTimeSimulation(0, physicsClientId=self._gui_client)
-
-    # ------------------------------------------------------------------ #
-    @property
-    def video_frame_count(self) -> int:
-        """Current captured frame count. GIL-safe int read from 100 Hz loop."""
-        return self._video_frame_count
-
-    # ------------------------------------------------------------------ #
-    def push_pose(self, snapshot: PoseSnapshot) -> None:
-        """Write latest pose snapshot. Non-blocking — skips if thread is rendering."""
-        if self._lock.acquire(blocking=False):
-            self._slot = snapshot
-            self._lock.release()
-
-    # ------------------------------------------------------------------ #
-    def stop(self) -> None:
-        """Signal thread to stop.  Must be followed by join() before
-        the caller disconnects the GUI client."""
-        self._stop_event.set()
-
-    # ------------------------------------------------------------------ #
-    def run(self) -> None:
-        """~viz_fps Hz render loop. Mirrors pose to the GUI window."""
-        period = 1.0 / self._viz_fps
-        while not self._stop_event.is_set():
-            loop_start = time.perf_counter()
-
-            with self._lock:
-                snapshot = self._slot
-
-            if snapshot is not None:
-                self._mirror_pose(snapshot)
-                p.stepSimulation(physicsClientId=self._gui_client)
-                self._video_frame_count += 1
-
-            elapsed = time.perf_counter() - loop_start
-            remaining = period - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
-
-    def _mirror_pose(self, snapshot: PoseSnapshot) -> None:
-        """Apply snapshot to GUI robot; update DebugVisualizer if present."""
-        try:
-            p.resetBasePositionAndOrientation(
-                self._gui_robot_id,
-                snapshot.base_pos,
-                snapshot.base_orn,
-                physicsClientId=self._gui_client,
-            )
-            for jname, jid in self._joint_list:
-                pos, vel = snapshot.joint_states.get(jname, (0.0, 0.0))
-                p.resetJointState(
-                    self._gui_robot_id, jid, pos, vel,
-                    physicsClientId=self._gui_client,
-                )
-            if self._visualizer is not None:
-                lp = snapshot.link_positions
-                left_hip  = tuple(lp.get(self._left_hip_link,  [0.0, 0.0, 0.0]))
-                right_hip = tuple(lp.get(self._right_hip_link, [0.0, 0.0, 0.0]))
-                self._visualizer.update(shared_state, left_hip, right_hip)
-        except Exception:
-            pass  # GUI mirror is non-critical
-
-
-# ============================================================================
 # MAIN CONTROLLER — OPTIMISED
 # ============================================================================
 
@@ -600,22 +474,15 @@ class Siclo1Controller:
         self.use_gui = use_gui
         self.viz_decimation: int = viz_decimation  # cycles between GUI renders
         self._visualizer = None                    # set after warmup if GUI mode
-        self._gui_sync_thread: Optional[GUISyncThread] = None  # set after GUI load
         self._walk_active: bool = (walk_distance is not None)
         self._quiet: bool = quiet  # suppresses all terminal telemetry output
 
         # 1. Physics client — ALWAYS headless
         self.physics_client = p.connect(p.DIRECT)
 
-        # 2. Optional GUI viewer
-        self.gui_client: Optional[int] = None
-        if use_gui:
-            try:
-                self.gui_client = p.connect(p.GUI)
-                time.sleep(1.0)  # X-server buffer — wait for window to appear (WSL)
-                p.removeAllUserDebugItems(physicsClientId=self.gui_client)  # clear comms pipe before spawn
-            except Exception:
-                self.gui_client = None
+        # 2. GUI subprocess placeholder (VizBridge started after warmup)
+        self.gui_client: Optional[int] = None  # kept for API compatibility; always None
+        self._viz_bridge: Optional[VizBridge] = None
 
         # 3. Heartbeat
         self.heartbeat = HeartbeatController(target_dt=TARGET_DT)
@@ -653,38 +520,7 @@ class Siclo1Controller:
         self._left_hip_link  = "Left_Upper_Leg_1"   # URDF-verified 2026-04-05
         self._right_hip_link = "Right_Upper_Leg_1"  # URDF-verified 2026-04-05
 
-        # 7. If GUI, mirror the scene
-        self._gui_robot_id: int = -1  # -1 = not loaded; guards _sync_gui() and DebugVisualizer
-        if self.gui_client is not None:
-            try:
-                p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0,
-                                           physicsClientId=self.gui_client)  # hide sidebars
-                p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0,
-                                           physicsClientId=self.gui_client)  # batch: suppress flicker during load
-                p.setGravity(0, 0, -9.81, physicsClientId=self.gui_client)
-                p.setAdditionalSearchPath(pybullet_data.getDataPath())
-                p.loadURDF("plane.urdf", physicsClientId=self.gui_client)
-                p.setAdditionalSearchPath(os.path.dirname(urdf_file))
-                self._gui_robot_id = p.loadURDF(
-                    urdf_file,
-                    basePosition=[0.0, 0.0, URDF_SPAWN_Z],
-                    physicsClientId=self.gui_client,
-                    flags=p.URDF_USE_INERTIA_FROM_FILE,
-                )
-                # Re-enable rendering now that all bodies are loaded
-                p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1,
-                                           physicsClientId=self.gui_client)
-                # Aim the camera at the robot's torso
-                p.resetDebugVisualizerCamera(
-                    cameraDistance=1.5,
-                    cameraYaw=90,
-                    cameraPitch=-20,
-                    cameraTargetPosition=[0, 0, 0.5],
-                    physicsClientId=self.gui_client,
-                )
-            except Exception as e:
-                print(f"[Siclo1][WARN] GUI robot load failed: {e}")
-                self._gui_robot_id = -1
+        # 7. GUI robot loaded in subprocess — nothing to do in main process
 
         # 8. Pre-cache mass totals (avoid per-cycle reparse)
         self._total_link_mass = sum(
@@ -721,23 +557,15 @@ class Siclo1Controller:
         self._warmup(warmup_cycles)
         self._telemetry_thread.log(f"  Warmup cycles: {warmup_cycles}")
 
-        # Debug visualiser — GUI mode only
-        if self.gui_client is not None:
-            from viz.debug_markers import DebugVisualizer
-            self._visualizer = DebugVisualizer(self.gui_client)
-
-        # 11. GUISyncThread — display only (no recording)
-        if self.gui_client is not None and self._gui_robot_id >= 0:
-            self._gui_sync_thread = GUISyncThread(
-                gui_client=self.gui_client,
-                gui_robot_id=self._gui_robot_id,
-                joint_list=self.pybullet._joint_list,
-                viz_fps=30,
-                visualizer=self._visualizer,
-                left_hip_link=self._left_hip_link,
-                right_hip_link=self._right_hip_link,
+        # 11. VizBridge — subprocess GUI (separate OS process, zero GIL contention)
+        if use_gui:
+            self._viz_bridge = VizBridge(
+                joint_names=list(URDF_JOINT_NAMES.values()),
+                urdf_path=urdf_file,
+                viz_fps=max(1, 100 // self.viz_decimation),
+                spawn_z=URDF_SPAWN_Z,
             )
-            self._gui_sync_thread.start()
+            self._viz_bridge.start()
 
         # 12. VideoRecorder — disabled temporarily
         VIDEO_LOGGING_ENABLED = False  # set True to re-enable MP4 recording
@@ -928,72 +756,15 @@ class Siclo1Controller:
         shared_state.telemetry.write(row)
 
         # 18. Optional GUI sync (decimated — every viz_decimation cycles)
-        if (self._gui_sync_thread is not None and
+        if (self._viz_bridge is not None and
                 shared_state.cycle_count % self.viz_decimation == 0):
-            self._push_gui_snapshot()
+            self._viz_bridge.push_pose(
+                shared_state.base_position,
+                shared_state.base_orientation,
+                shared_state.joint_positions,
+            )
 
         return True
-
-    # ------------------------------------------------------------------ #
-    def _push_gui_snapshot(self) -> None:
-        """Build a PoseSnapshot from current physics state and push to GUISyncThread.
-
-        Called every viz_decimation cycles from step().  Non-critical — any
-        exception is suppressed so the 100 Hz loop is never interrupted.
-        """
-        if self._gui_sync_thread is None or self._gui_robot_id < 0:
-            return
-        try:
-            pos, orn = p.getBasePositionAndOrientation(
-                self.pybullet.robot_id, physicsClientId=self.physics_client)
-            joint_states = {
-                jname: (
-                    shared_state.joint_positions.get(jname, 0.0),
-                    shared_state.joint_velocities.get(jname, 0.0),
-                )
-                for jname, _ in self.pybullet._joint_list
-            }
-            snap = PoseSnapshot(
-                base_pos=pos,
-                base_orn=orn,
-                joint_states=joint_states,
-                link_positions=dict(shared_state.link_positions),
-                mission_state=shared_state.mission_state,
-                emergency_stop=shared_state.emergency_stop_triggered,
-            )
-            self._gui_sync_thread.push_pose(snap)
-        except Exception:
-            pass  # GUI sync is non-critical
-
-    # ------------------------------------------------------------------ #
-    def _sync_gui(self) -> None:
-        """Mirror joint states to the GUI client at decimated rate."""
-        if self._gui_robot_id < 0:
-            return  # GUI robot not loaded — skip silently
-        try:
-            rid_phys = self.pybullet.robot_id
-            pc_phys  = self.physics_client
-            pc_gui   = self.gui_client
-
-            # Mirror base pose
-            pos, orn = p.getBasePositionAndOrientation(
-                rid_phys, physicsClientId=pc_phys)
-            p.resetBasePositionAndOrientation(
-                self._gui_robot_id, pos, orn, physicsClientId=pc_gui)
-
-            # Mirror joint positions
-            for jname, jid in self.pybullet._joint_list:
-                js = p.getJointState(rid_phys, jid, physicsClientId=pc_phys)
-                p.resetJointState(self._gui_robot_id, jid, js[0], js[1],
-                                  physicsClientId=pc_gui)
-            # Update debug visualisation (annulus arcs + hip→foot vectors)
-            if self._visualizer is not None:
-                lp = self.shared_state.link_positions
-                left_hip  = tuple(lp.get(self._left_hip_link,  [0.0, 0.0, 0.0]))
-                right_hip = tuple(lp.get(self._right_hip_link, [0.0, 0.0, 0.0]))
-                self._visualizer.update(self.shared_state, left_hip, right_hip)
-        except Exception:
-            pass  # GUI sync is non-critical
 
     # ------------------------------------------------------------------ #
     def run(self, max_cycles: int = 1000, print_interval: float = 1.0):
@@ -1080,10 +851,9 @@ class Siclo1Controller:
                 print(f"[INFO] walk.mp4 saved: {video_path} "
                       f"({self._recorder.frame_count} frames)")
 
-        # Step 2: stop GUI sync thread.
-        if self._gui_sync_thread is not None and self._gui_sync_thread.is_alive():
-            self._gui_sync_thread.stop()
-            self._gui_sync_thread.join(timeout=2.0)
+        # Step 2: stop GUI subprocess.
+        if self._viz_bridge is not None:
+            self._viz_bridge.stop()
 
         # Step 3: stop telemetry thread.
         if self._telemetry_thread.is_alive():
@@ -1095,11 +865,6 @@ class Siclo1Controller:
             p.disconnect(physicsClientId=self.physics_client)
         except Exception:
             pass
-        if self.gui_client is not None:
-            try:
-                p.disconnect(physicsClientId=self.gui_client)
-            except Exception:
-                pass
         self._telemetry_thread.flush_to_stdout()
 
 
