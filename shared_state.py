@@ -42,6 +42,17 @@ ERR_PHASE_TIMEOUT     = 6   # step-phase timeout fired (hot-path safe, no string
 
 
 # ============================================================================
+# PER-STAGE TIMING CONSTANTS
+# ============================================================================
+
+STAGE_NAMES: tuple = (
+    'sensors', 'link_positions', 'perception', 'stability',
+    'active_balance', 'grf', 'gait_planner', 'mission',
+    'wbc', 'recovery', 'apply_control', 'step_sim',
+)  # 12 checkpoints matching step() stage order in HeartBeat.py
+
+
+# ============================================================================
 # TELEMETRY RING BUFFER  — zero-allocation, numpy-backed
 # ============================================================================
 
@@ -370,6 +381,11 @@ class Siclo1State:
         self._error_timestamps = np.zeros(256, dtype=np.float64)
         self._error_write_idx = 0
 
+        # Per-stage elapsed times from cycle_start (seconds).
+        # Written in-place by HeartBeat.step() at each stage boundary.
+        # Zero allocation; never grows.
+        self._stage_times: np.ndarray = np.zeros(len(STAGE_NAMES), dtype=np.float64)
+
     # ========================================================================
     # THREAD-SAFE SETTERS
     # ========================================================================
@@ -544,6 +560,7 @@ class Siclo1State:
             self._error_codes[:] = 0
             self._error_timestamps[:] = 0.0
             self._error_write_idx = 0
+            self._stage_times[:] = 0.0
 
 
 # ============================================================================
