@@ -598,15 +598,27 @@ class Siclo1Controller:
             theta_target = shared_state.ik_left_angles[idx]
             theta_now    = jp.get(jname, 0.0)
             omega_now    = jv.get(jname, 0.0)
-            tau = WBC_KP * (theta_target - theta_now) - WBC_KD * omega_now
-            torques[jname] = torques.get(jname, 0.0) + _clip_effort(jname, tau)
+            error = theta_target - theta_now
+            tau = WBC_KP * error - WBC_KD * omega_now
+            clipped_tau = _clip_effort(jname, tau)
+            torques[jname] = torques.get(jname, 0.0) + clipped_tau
+            # Tracking telemetry
+            shared_state.wbc_tracking_error[jname] = error
+            lim = URDF_JOINT_LIMITS.get(jname, {}).get('effort', 100.0)
+            shared_state.wbc_torque_saturated[jname] = (abs(tau) >= lim - 0.1)
 
         for idx, jname, _ in _WBC_RIGHT_JOINTS:
             theta_target = shared_state.ik_right_angles[idx]
             theta_now    = jp.get(jname, 0.0)
             omega_now    = jv.get(jname, 0.0)
-            tau = WBC_KP * (theta_target - theta_now) - WBC_KD * omega_now
-            torques[jname] = torques.get(jname, 0.0) + _clip_effort(jname, tau)
+            error = theta_target - theta_now
+            tau = WBC_KP * error - WBC_KD * omega_now
+            clipped_tau = _clip_effort(jname, tau)
+            torques[jname] = torques.get(jname, 0.0) + clipped_tau
+            # Tracking telemetry
+            shared_state.wbc_tracking_error[jname] = error
+            lim = URDF_JOINT_LIMITS.get(jname, {}).get('effort', 100.0)
+            shared_state.wbc_torque_saturated[jname] = (abs(tau) >= lim - 0.1)
 
         shared_state.target_torques = torques
 
