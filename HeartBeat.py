@@ -23,6 +23,7 @@ Date   : March 2026
 ================================================================================
 """
 
+import gc
 import os
 import sys
 import time
@@ -76,8 +77,8 @@ LOG_BUFFER_SIZE: int = 2000
 
 # WBC joint-space PD gains — converts IK angle targets to additive torques.
 # These are tuning parameters, not URDF-derived.
-WBC_KP: float = 200.0   # N·m/rad, joint position proportional gain
-WBC_KD: float = 15.0    # N·m·s/rad, joint velocity derivative gain
+WBC_KP: float = 100.0   # N·m/rad, joint position proportional gain (halved to avoid saturation)
+WBC_KD: float = 28.0    # N·m·s/rad, joint velocity derivative gain (ζ ≈ 0.9 near-critical damping)
 
 # WBC joint mapping: (IK angle index, URDF joint name, sign)
 # sign: +1 for right (axis +X), -1 for left (axis -X)
@@ -774,12 +775,17 @@ class Siclo1Controller:
         print(f"STARTING SIMULATION \u2014 {max_cycles} cycles @ {TARGET_FREQ} Hz  (OPTIMISED)")
         print(f"{'='*70}\n")
 
-        for i in range(max_cycles):
-            success = self.step()
-            if not success:
-                self._telemetry_thread.log(
-                    f"[STOPPED] t={shared_state.sim_time:.2f}s")
-                break
+        gc.disable()  # prevent GC pauses inside 100 Hz hot loop
+        try:
+            for i in range(max_cycles):
+                success = self.step()
+                if not success:
+                    self._telemetry_thread.log(
+                        f"[STOPPED] t={shared_state.sim_time:.2f}s")
+                    break
+        finally:
+            gc.enable()
+            gc.collect()  # collect deferred garbage after loop
 
         if not self._quiet:
             self._print_final_summary()

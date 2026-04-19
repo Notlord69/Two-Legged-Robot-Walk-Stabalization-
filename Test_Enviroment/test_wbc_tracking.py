@@ -26,3 +26,15 @@ def test_saturation_flag_initially_empty():
     """wbc_torque_saturated starts as empty dict."""
     shared_state.reset()
     assert shared_state.wbc_torque_saturated == {}
+
+
+def test_wbc_kp_reduced():
+    """WBC_KP should be 100.0 N·m/rad (reduced from 200)."""
+    from HeartBeat import WBC_KP
+    assert WBC_KP == 100.0, f"WBC_KP={WBC_KP}, expected 100.0"
+
+
+def test_wbc_kd_increased():
+    """WBC_KD should be 28.0 N·m·s/rad (increased from 15)."""
+    from HeartBeat import WBC_KD
+    assert WBC_KD == 28.0, f"WBC_KD={WBC_KD}, expected 28.0"
