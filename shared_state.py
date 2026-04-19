@@ -314,6 +314,11 @@ class Siclo1State:
         # Written by grf.py; merged into applied torques by HeartBeat.apply_control().
         self.grf_torque_correction: Dict[str, float] = {}
 
+        # WBC tracking telemetry — written by HeartBeat._wbc_step() each cycle.
+        # Used to diagnose torque saturation and tracking lag.
+        self.wbc_tracking_error: Dict[str, float] = {}      # rad, θ_cmd - θ_actual per joint
+        self.wbc_torque_saturated: Dict[str, bool] = {}     # True when |τ| ≥ effort limit
+
         # Which leg is currently in swing phase.
         # Written by gait_planner.py.
         self.active_swing_side: str = "left"
