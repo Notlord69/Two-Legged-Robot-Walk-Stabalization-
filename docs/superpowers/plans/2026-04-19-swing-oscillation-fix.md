@@ -453,3 +453,61 @@ git commit -m "feat: swing oscillation fix complete
 | 6 | Integration validation | 0 (manual) |
 
 **Total new tests:** 12
+
+---
+
+## Implementation Status (2026-04-19)
+
+### Completed Tasks
+- [x] Task 1: Telemetry fields added to shared_state.py
+- [x] Task 2: WBC gains updated (KP=100, KD=28)
+- [x] Task 3: Telemetry logging in _wbc_step()
+- [x] Task 4: Swing constants updated (HEIGHT=0.06, DURATION=0.50)
+- [x] Task 5: Regression tests pass (278 tests)
+- [ ] Task 6: Integration validation — **BLOCKED**
+
+### Bug Fixed During Session
+**Timestep bug:** `gait_planner.py` was using wall-clock `last_dt` (~0.0001s in DIRECT mode) instead of fixed simulation timestep (0.01s). Fixed by hardcoding `dt = 0.01`.
+
+### Remaining Issues (Unsolved)
+
+**Symptom:** Robot lifts leg slightly, then swings crazily. Simulation crashes at ~405 cycles.
+
+**Observations:**
+1. `max_err=0.658rad` — tracking error is HIGH (target was <0.3rad)
+2. `sat_count=0` — no torque saturation, suggesting gains too LOW
+3. No `[LIFT]` or `[SWING]` logs — FSM stuck in DOUBLE_SUPPORT or COM_SHIFT
+4. Crash at cycle 405 — likely physics instability from poor tracking
+
+**Hypothesis:** WBC_KP=100 is too soft. The leg can't track IK targets, leading to large errors and eventually instability.
+
+**Next Steps to Try:**
+1. Increase WBC_KP to 150 (middle ground between 100 and 200)
+2. Check why FSM isn't reaching LIFT phase — may need to debug COM_SHIFT conditions
+3. Add more logging to COM_SHIFT phase handler
+4. Consider if FORCE_BALANCE_RATIO (2.0) gate is blocking transition
+
+### Diagnostic Logging Added
+- `[GATE]` in DOUBLE_SUPPORT — shows timer, ramp_gain, forces, ratio
+- `[LIFT]` in LIFT phase — shows forces and velocity (not reached yet)
+- `[SWING]` in SWING phase — shows phi and timer (not reached yet)
+- `[WBC]` every 50 cycles — shows max tracking error and saturation count
+
+### Files Modified
+| File | Changes |
+|------|---------|
+| `shared_state.py` | Added wbc_tracking_error, wbc_torque_saturated; clear in reset() |
+| `HeartBeat.py` | WBC_KP=100, WBC_KD=28; telemetry logging; periodic WBC print |
+| `gait_planner.py` | SWING_HEIGHT=0.06, SWING_DURATION=0.50; fixed dt=0.01; debug prints |
+| `Test_Enviroment/test_wbc_tracking.py` | 8 new tests |
+| `Test_Enviroment/test_swing_constants.py` | 4 new tests |
+
+### Commits Made
+```
+d854456 feat(shared_state): add WBC tracking telemetry fields
+82a10f3 tune(HeartBeat): reduce WBC_KP, increase WBC_KD for critical damping
+e9bb9a3 feat(HeartBeat): populate WBC tracking telemetry in _wbc_step
+2defa3c tune(gait_planner): increase SWING_HEIGHT and SWING_DURATION
+cca4f55 test: update test assertions for new swing constants
+35e7450 fix(gait_planner): use fixed 0.01s timestep instead of wall-clock dt
+```
