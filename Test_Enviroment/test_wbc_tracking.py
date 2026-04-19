@@ -17,13 +17,13 @@ def test_saturation_flag_field_exists():
 
 
 def test_tracking_error_initially_empty():
-    """wbc_tracking_error starts as empty dict."""
+    """wbc_tracking_error starts as empty dict after reset."""
     shared_state.reset()
     assert shared_state.wbc_tracking_error == {}
 
 
 def test_saturation_flag_initially_empty():
-    """wbc_torque_saturated starts as empty dict."""
+    """wbc_torque_saturated starts as empty dict after reset."""
     shared_state.reset()
     assert shared_state.wbc_torque_saturated == {}
 

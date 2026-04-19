@@ -566,6 +566,9 @@ class Siclo1State:
             self._error_timestamps[:] = 0.0
             self._error_write_idx = 0
             self._stage_times[:] = 0.0
+            # WBC tracking telemetry
+            self.wbc_tracking_error.clear()
+            self.wbc_torque_saturated.clear()
 
 
 # ============================================================================
