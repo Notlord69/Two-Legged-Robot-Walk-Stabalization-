@@ -55,8 +55,8 @@ print("GAIT_PLANNER LOADED — version with DS gate")
 STEP_LENGTH:       float = 0.12   # m, fixed sagittal advance per step (nominal)
 STEP_TIMING_SCALE: float = 0.5    # dimensionless, blend factor for CP correction
 
-SWING_HEIGHT:   float = 0.04   # m, peak foot clearance above ground at φ=0.5
-SWING_DURATION: float = 0.40   # s, full swing phase (40 cycles at 100 Hz)
+SWING_HEIGHT:   float = 0.06   # m, peak foot clearance above ground at φ=0.5 (+2cm margin)
+SWING_DURATION: float = 0.50   # s, full swing phase (50 cycles at 100 Hz, reduced accel)
 
 # Phase timeout constants
 DS_MIN_TIME:           float = 0.10   # s, minimum double-support duration
