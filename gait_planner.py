@@ -148,9 +148,10 @@ class GaitPlannerController:
         if shared_state.timing_violation_this_cycle:
             return
 
-        dt = shared_state.last_dt
-        if dt <= 0.0 or dt > 0.5:
-            dt = 0.01   # fallback to 100 Hz nominal
+        # Use fixed simulation timestep (100 Hz = 0.01s), not wall-clock last_dt.
+        # In DIRECT mode PyBullet runs faster than real-time, so wall-clock dt
+        # can be microseconds. The physics step is always 0.01s.
+        dt = 0.01  # s, fixed 100 Hz simulation timestep
 
         # Advance phase timer every cycle before dispatching
         shared_state.step_phase_timer += dt
@@ -286,6 +287,7 @@ class GaitPlannerController:
         swing_force  = self._swing_foot_force()
         stance_force = self._stance_foot_force()
         swing_vel_z  = abs(float(self._swing_foot_velocity()[2]))
+        print(f"[LIFT] timer={timer:.3f} swing_F={swing_force:.1f} stance_F={stance_force:.1f} vel_z={swing_vel_z:.3f}")
 
         # Advance to SWING only when the SWING foot is unloaded AND the STANCE
         # foot is actively bearing weight.  A PyBullet GJK glitch can zero both
@@ -311,6 +313,8 @@ class GaitPlannerController:
         self._compute_stance_ik()
 
         side    = shared_state.active_swing_side
+        phi     = shared_state.swing_phase
+        print(f"[SWING] side={side} phi={phi:.3f} timer={shared_state.step_phase_timer:.3f}")
         hip_key = _LEFT_HIP_LINK if side == "left" else _RIGHT_HIP_LINK
         hip_pos = shared_state.link_positions.get(hip_key, np.zeros(3))
         hip_x   = float(hip_pos[0])

@@ -622,6 +622,12 @@ class Siclo1Controller:
 
         shared_state.target_torques = torques
 
+        # Periodic WBC telemetry logging (every 50 cycles = 0.5s)
+        if shared_state.cycle_count % 50 == 0:
+            max_err = max(abs(e) for e in shared_state.wbc_tracking_error.values()) if shared_state.wbc_tracking_error else 0.0
+            sat_count = sum(1 for v in shared_state.wbc_torque_saturated.values() if v)
+            print(f"[WBC] cycle={shared_state.cycle_count} max_err={max_err:.3f}rad sat_count={sat_count}")
+
     # ------------------------------------------------------------------ #
     def _warmup(self, cycles: int) -> None:
         """Run full control pipeline for N cycles without real-time timing.
