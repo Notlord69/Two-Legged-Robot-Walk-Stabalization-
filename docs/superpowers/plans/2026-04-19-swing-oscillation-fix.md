@@ -469,23 +469,32 @@ git commit -m "feat: swing oscillation fix complete
 ### Bug Fixed During Session
 **Timestep bug:** `gait_planner.py` was using wall-clock `last_dt` (~0.0001s in DIRECT mode) instead of fixed simulation timestep (0.01s). Fixed by hardcoding `dt = 0.01`.
 
-### Remaining Issues (Unsolved)
+### Bug Fixed (2026-04-20): Non-Stance Leg IK
 
-**Symptom:** Robot lifts leg slightly, then swings crazily. Simulation crashes at ~405 cycles.
+**Root Cause Found:** During DOUBLE_SUPPORT and COM_SHIFT, only the stance leg's IK was being computed by `_compute_stance_ik()`. The non-stance (left) leg's IK targets stayed at initialization value (0,0,0), causing the WBC to try to extend that leg and destabilize the robot.
+
+**Fix Applied:** Added `_update_non_stance_ik_from_joints()` which updates the non-stance leg's IK targets from current joint positions each cycle during DOUBLE_SUPPORT and COM_SHIFT. This prevents WBC from fighting against the current leg pose.
+
+**Results:**
+- Before fix: Robot crashed immediately at ramp=1.0 with tracking error ~3.7 rad
+- After fix: Robot survives through RAMP and phase transitions with tracking error ~0.2-0.4 rad
+- Robot now makes it to timer=1.5s before eventual instability (vs immediate crash)
+
+### Remaining Issues
+
+**Symptom:** Robot survives much longer but still falls around timer=1.5s in DOUBLE_SUPPORT.
 
 **Observations:**
-1. `max_err=0.658rad` — tracking error is HIGH (target was <0.3rad)
-2. `sat_count=0` — no torque saturation, suggesting gains too LOW
-3. No `[LIFT]` or `[SWING]` logs — FSM stuck in DOUBLE_SUPPORT or COM_SHIFT
-4. Crash at cycle 405 — likely physics instability from poor tracking
-
-**Hypothesis:** WBC_KP=100 is too soft. The leg can't track IK targets, leading to large errors and eventually instability.
+1. `max_err=0.2-0.4rad` — tracking error is now acceptable
+2. Periodic spikes at cycles 400, 550 (~2.5 rad) — possible phase transition issues
+3. FSM transitions are happening (timer resets observed) but robot doesn't reach LIFT
+4. Eventually loses contact at timer ~1.5s
 
 **Next Steps to Try:**
-1. Increase WBC_KP to 150 (middle ground between 100 and 200)
-2. Check why FSM isn't reaching LIFT phase — may need to debug COM_SHIFT conditions
-3. Add more logging to COM_SHIFT phase handler
-4. Consider if FORCE_BALANCE_RATIO (2.0) gate is blocking transition
+1. Debug why COM_SHIFT → LIFT transition isn't completing
+2. Check capture point calculation during COM_SHIFT
+3. Consider if stability_status check is blocking transition
+4. May need further WBC gain tuning
 
 ### Diagnostic Logging Added
 - `[GATE]` in DOUBLE_SUPPORT — shows timer, ramp_gain, forces, ratio
@@ -496,9 +505,9 @@ git commit -m "feat: swing oscillation fix complete
 ### Files Modified
 | File | Changes |
 |------|---------|
-| `shared_state.py` | Added wbc_tracking_error, wbc_torque_saturated; clear in reset() |
+| `shared_state.py` | Added wbc_tracking_error, wbc_torque_saturated, non_stance_foot_world_pos |
 | `HeartBeat.py` | WBC_KP=100, WBC_KD=28; telemetry logging; periodic WBC print |
-| `gait_planner.py` | SWING_HEIGHT=0.06, SWING_DURATION=0.50; fixed dt=0.01; debug prints |
+| `gait_planner.py` | SWING_HEIGHT=0.06, SWING_DURATION=0.50; fixed dt=0.01; `_update_non_stance_ik_from_joints()` |
 | `Test_Enviroment/test_wbc_tracking.py` | 8 new tests |
 | `Test_Enviroment/test_swing_constants.py` | 4 new tests |
 
@@ -510,4 +519,5 @@ e9bb9a3 feat(HeartBeat): populate WBC tracking telemetry in _wbc_step
 2defa3c tune(gait_planner): increase SWING_HEIGHT and SWING_DURATION
 cca4f55 test: update test assertions for new swing constants
 35e7450 fix(gait_planner): use fixed 0.01s timestep instead of wall-clock dt
+(pending) fix(gait_planner): compute non-stance leg IK during double-support
 ```

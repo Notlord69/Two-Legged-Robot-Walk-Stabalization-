@@ -360,6 +360,10 @@ class Siclo1State:
         # Written by gait_planner.py exactly once per stance entry.
         self.stance_foot_world_pos: np.ndarray = np.zeros(3)
 
+        # Non-stance foot world-frame position locked at DOUBLE_SUPPORT entry.
+        # Used for computing IK targets for both legs during double-support.
+        self.non_stance_foot_world_pos: np.ndarray = np.zeros(3)
+
         # ====================================================================
         # SYSTEM HEALTH
         # ====================================================================

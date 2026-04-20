@@ -214,14 +214,38 @@ class GaitPlannerController:
             shared_state.ik_right_angles = angles
 
     def _lock_stance_foot(self) -> None:
-        """Snapshot current stance foot world position into stance_foot_world_pos.
+        """Snapshot current stance foot world position at DOUBLE_SUPPORT entry.
 
-        Called exactly once per stance entry (DOUBLE_SUPPORT entry).
+        Called exactly once per stance entry.
         """
         stance_side = shared_state.stance_side
         foot_pos = (shared_state.left_foot_position  if stance_side == "left"
                     else shared_state.right_foot_position)
         shared_state.stance_foot_world_pos = foot_pos.copy()
+
+    def _update_non_stance_ik_from_joints(self) -> None:
+        """Update non-stance leg IK from current joint positions each cycle.
+
+        Called during DOUBLE_SUPPORT to keep non-stance leg IK matching actual
+        joint positions. This prevents WBC from generating torques that fight
+        against the current leg pose.
+        """
+        stance_side = shared_state.stance_side
+        jp = shared_state.joint_positions
+        if stance_side == "right":
+            # Non-stance is left
+            shared_state.ik_left_angles = (
+                jp.get('Left_Hip_Forwards', 0.0),
+                jp.get('Left_Knee', 0.0),
+                jp.get('Left_Ankle', 0.0),
+            )
+        else:
+            # Non-stance is right
+            shared_state.ik_right_angles = (
+                jp.get('Right_Hip_Fowards', 0.0),
+                jp.get('Right_Knee', 0.0),
+                jp.get('Right_Ankle', 0.0),
+            )
 
     # ── Phase handlers ────────────────────────────────────────────────────────
 
@@ -241,6 +265,7 @@ class GaitPlannerController:
             self._ds_lock_pending = False
 
         self._compute_stance_ik()
+        self._update_non_stance_ik_from_joints()
 
         timer = shared_state.step_phase_timer
         if timer >= DS_TIMEOUT:
@@ -262,6 +287,7 @@ class GaitPlannerController:
 
     def _handle_com_shift(self, dt: float) -> None:
         self._compute_stance_ik()
+        self._update_non_stance_ik_from_joints()
 
         timer    = shared_state.step_phase_timer
         stable   = (shared_state.stability_status != StabilityStatus.UNSTABLE)
