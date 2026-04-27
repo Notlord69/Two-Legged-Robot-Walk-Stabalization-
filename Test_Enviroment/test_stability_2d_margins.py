@@ -11,7 +11,11 @@ def _setup_standing():
     Both feet confirmed with enough contact points to form a convex polygon
     (need >= 3 unique 2D points for ConvexHull).
     """
+    from stability import stability_monitor
     shared_state.reset()
+    # Reset the monitor's velocity state to avoid cross-test leakage
+    stability_monitor.prev_com = None
+    stability_monitor.prev_time = 0.0
     shared_state.com_position = np.array([0.0, 0.0, 0.8806])
     shared_state.com_velocity = np.zeros(3)
     shared_state.base_position = np.array([0.0, 0.0, 0.8806])
