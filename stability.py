@@ -361,6 +361,15 @@ class StabilityMonitor:
         cp_point = Point(cp_xy[0], cp_xy[1])
         if polygon.contains(cp_point):
             margin_distance = polygon.exterior.distance(cp_point)
+
+            # 2D margin decomposition — per-axis distance from CP to polygon edges
+            xs = [pt[0] for pt in polygon.exterior.coords]
+            ys = [pt[1] for pt in polygon.exterior.coords]
+            shared_state.stability_margin_lateral = min(
+                cp_xy[0] - min(xs), max(xs) - cp_xy[0])   # m, X-axis margin
+            shared_state.stability_margin_sagittal = min(
+                cp_xy[1] - min(ys), max(ys) - cp_xy[1])   # m, Y-axis margin
+
             _t4 = time.perf_counter()
             _emit_profile(_t0, _t1, _t2, _t3, _t4, len(contact_points))
             if margin_distance > safety_margin * 0.5:
@@ -371,6 +380,11 @@ class StabilityMonitor:
                 return StabilityStatus.MARGINAL
         else:
             margin_distance = -polygon.exterior.distance(cp_point)
+
+            # CP outside polygon — zero per-axis margins
+            shared_state.stability_margin_lateral = 0.0
+            shared_state.stability_margin_sagittal = 0.0
+
             _t4 = time.perf_counter()
             _emit_profile(_t0, _t1, _t2, _t3, _t4, len(contact_points))
             shared_state.set_stability_status(StabilityStatus.UNSTABLE, margin=margin_distance)
