@@ -47,7 +47,7 @@ ERR_PHASE_TIMEOUT     = 6   # step-phase timeout fired (hot-path safe, no string
 
 STAGE_NAMES: tuple = (
     'sensors', 'link_positions', 'perception', 'stability',
-    'active_balance', 'grf', 'gait_planner', 'mission',
+    'balance', 'grf', 'gait_planner', 'mission',
     'wbc', 'recovery', 'apply_control', 'step_sim',
 )  # 12 checkpoints matching step() stage order in HeartBeat.py
 
@@ -60,16 +60,72 @@ class TelemetryRingBuffer:
     """
     Pre-allocated numpy ring buffer for zero-allocation telemetry.
 
-    Each row stores one telemetry sample:
-    [timestamp, cycle, error_code, com_x, com_y, com_z,
-     left_contact_state, right_contact_state, stability_status,
-     left_force, right_force, stability_margin, compute_time_us,
-     extra_0, extra_1, extra_2]
+    72-column layout (all floats):
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │ CORE TIMING & STATE (0–15)                                          │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │  0: timestamp_s        1: cycle             2: error_code           │
+    │  3: com_x              4: com_y             5: com_z                │
+    │  6: com_vel_x          7: com_vel_y         8: com_vel_z            │
+    │  9: left_contact      10: right_contact    11: stability_status     │
+    │ 12: left_force_n      13: right_force_n    14: stability_margin_m   │
+    │ 15: compute_us                                                      │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ BASE ANGULAR VELOCITY (16–18)                                       │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 16: base_ang_vel_x    17: base_ang_vel_y   18: base_ang_vel_z       │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ JOINT ANGLES — ACTUAL (19–24)                                       │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 19: L_hip_fwd         20: L_knee           21: L_ankle              │
+    │ 22: R_hip_fwd         23: R_knee           24: R_ankle              │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ IK COMMANDED ANGLES (25–32)                                         │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 25: ik_L_hip_roll     26: ik_L_hip_pitch   27: ik_L_knee            │
+    │ 28: ik_L_ankle        29: ik_R_hip_roll    30: ik_R_hip_pitch       │
+    │ 31: ik_R_knee         32: ik_R_ankle                                │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ WBC TRACKING ERROR (33–38) — cmd - actual, rad                      │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 33: err_L_hip_fwd     34: err_L_knee       35: err_L_ankle          │
+    │ 36: err_R_hip_fwd     37: err_R_knee       38: err_R_ankle          │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ TORQUE SATURATION FLAGS (39–44) — 1.0 if saturated                  │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 39: sat_L_hip_fwd     40: sat_L_knee       41: sat_L_ankle          │
+    │ 42: sat_R_hip_fwd     43: sat_R_knee       44: sat_R_ankle          │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ APPLIED TORQUES (45–50) — N·m                                       │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 45: tau_L_hip_fwd     46: tau_L_knee       47: tau_L_ankle          │
+    │ 48: tau_R_hip_fwd     49: tau_R_knee       50: tau_R_ankle          │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ GAIT STATE (51–55)                                                  │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 51: step_phase        52: swing_phase      53: swing_side (0=L,1=R) │
+    │ 54: mission_state     55: ramp_gain                                 │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ FOOT POSITIONS — ACTUAL (56–61) — m, world frame                    │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 56: L_foot_x          57: L_foot_y         58: L_foot_z             │
+    │ 59: R_foot_x          60: R_foot_y         61: R_foot_z             │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ FOOT TARGETS (62–67) — m, world frame                               │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 62: L_target_x        63: L_target_y       64: L_target_z           │
+    │ 65: R_target_x        66: R_target_y       67: R_target_z           │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ CAPTURE POINT & SLIP (68–71)                                        │
+    ├─────────────────────────────────────────────────────────────────────┤
+    │ 68: capture_pt_x      69: capture_pt_y                              │
+    │ 70: L_slip            71: R_slip                                    │
+    └─────────────────────────────────────────────────────────────────────┘
 
     Producer (100Hz): writes raw floats via write().
     Consumer (10Hz): reads via read_batch().
     """
-    COLS = 16
+    COLS = 72
 
     def __init__(self, capacity: int = 2048):
         self._buf = np.zeros((capacity, self.COLS), dtype=np.float64)
@@ -279,9 +335,10 @@ class Siclo1State:
         # KINEMATICS STATE (Written by kinematics.py, read by WBC / HeartBeat)
         # ====================================================================
         # IK output angles, URDF-signed and ready for joint targets (rad).
-        # Tuple order: (hip_pitch, knee, ankle) per side.
-        self.ik_left_angles:  tuple = (0.0, 0.0, 0.0)
-        self.ik_right_angles: tuple = (0.0, 0.0, 0.0)
+        # Tuple order: (hip_roll, hip_pitch, knee, ankle) per side.
+        # hip_roll = Hip_Inwards joint (lateral tilt for weight transfer)
+        self.ik_left_angles:  tuple = (0.0, 0.0, 0.0, 0.0)
+        self.ik_right_angles: tuple = (0.0, 0.0, 0.0, 0.0)
 
         # Swing trajectory state — persists across 100 Hz loop iterations.
         self.swing_phase: float = 0.0            # normalized phase ∈ [0, 1]
@@ -363,6 +420,26 @@ class Siclo1State:
         # Non-stance foot world-frame position locked at DOUBLE_SUPPORT entry.
         # Used for computing IK targets for both legs during double-support.
         self.non_stance_foot_world_pos: np.ndarray = np.zeros(3)
+
+        # ====================================================================
+        # BALANCE CONTROLLER STATE (Written by balance_controller.py)
+        # ====================================================================
+
+        # Balance controller outputs (written by balance_controller.py)
+        self.balance_hip_roll_left:  float = 0.0   # rad, position target for Left_Hip_Inwards
+        self.balance_hip_roll_right: float = 0.0   # rad, position target for Right_Hip_Inwards
+        self.sagittal_pitch_offset:  float = 0.0   # rad, added to IK hip_pitch before WBC
+        self.emergency_sagittal_torque: Dict[str, float] = {}  # N·m, direct injection
+
+        # 2D stability margins (written by stability.py)
+        self.stability_margin_lateral:  float = 0.0  # m, CP-to-polygon-edge in X
+        self.stability_margin_sagittal: float = 0.0  # m, CP-to-polygon-edge in Y
+
+        # Balance diagnostics
+        self.capture_point_error_lateral:  float = 0.0  # m, xi_x - support_center_x
+        self.capture_point_error_sagittal: float = 0.0  # m, xi_y - support_center_y
+        self.balance_mode_lateral:  str = "INACTIVE"    # ACTIVE/INACTIVE
+        self.balance_mode_sagittal: str = "INACTIVE"    # NORMAL/EMERGENCY/INACTIVE
 
         # ====================================================================
         # SYSTEM HEALTH
@@ -573,6 +650,17 @@ class Siclo1State:
             # WBC tracking telemetry
             self.wbc_tracking_error.clear()
             self.wbc_torque_saturated.clear()
+            # Balance controller fields
+            self.balance_hip_roll_left = 0.0
+            self.balance_hip_roll_right = 0.0
+            self.sagittal_pitch_offset = 0.0
+            self.emergency_sagittal_torque = {}
+            self.stability_margin_lateral = 0.0
+            self.stability_margin_sagittal = 0.0
+            self.capture_point_error_lateral = 0.0
+            self.capture_point_error_sagittal = 0.0
+            self.balance_mode_lateral = "INACTIVE"
+            self.balance_mode_sagittal = "INACTIVE"
 
 
 # ============================================================================

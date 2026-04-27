@@ -11,7 +11,7 @@ def test_stage_names_content():
     from shared_state import STAGE_NAMES
     expected = (
         'sensors', 'link_positions', 'perception', 'stability',
-        'active_balance', 'grf', 'gait_planner', 'mission',
+        'balance', 'grf', 'gait_planner', 'mission',
         'wbc', 'recovery', 'apply_control', 'step_sim',
     )
     assert STAGE_NAMES == expected
