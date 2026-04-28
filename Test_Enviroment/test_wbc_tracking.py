@@ -45,13 +45,14 @@ def test_tracking_error_populated_after_wbc():
     from shared_state import shared_state, URDF_JOINT_LIMITS
 
     shared_state.reset()
-    # Set up minimal state for WBC to run
-    shared_state.joint_positions = {'Left_Hip_Forwards': 0.1, 'Left_Knee': 0.2, 'Left_Ankle': 0.0,
-                                    'Right_Hip_Fowards': 0.1, 'Right_Knee': 0.2, 'Right_Ankle': 0.0}
-    shared_state.joint_velocities = {'Left_Hip_Forwards': 0.0, 'Left_Knee': 0.0, 'Left_Ankle': 0.0,
-                                     'Right_Hip_Fowards': 0.0, 'Right_Knee': 0.0, 'Right_Ankle': 0.0}
-    shared_state.ik_left_angles = (0.15, 0.25, 0.0)   # slightly different from actual
-    shared_state.ik_right_angles = (0.15, 0.25, 0.0)
+    # Set up minimal state for WBC to run (including hip roll joints)
+    shared_state.joint_positions = {'Left_Hip_Inwards': 0.0, 'Left_Hip_Forwards': 0.1, 'Left_Knee': 0.2, 'Left_Ankle': 0.0,
+                                    'Right_Hip_Inwards': 0.0, 'Right_Hip_Fowards': 0.1, 'Right_Knee': 0.2, 'Right_Ankle': 0.0}
+    shared_state.joint_velocities = {'Left_Hip_Inwards': 0.0, 'Left_Hip_Forwards': 0.0, 'Left_Knee': 0.0, 'Left_Ankle': 0.0,
+                                     'Right_Hip_Inwards': 0.0, 'Right_Hip_Fowards': 0.0, 'Right_Knee': 0.0, 'Right_Ankle': 0.0}
+    # 4-tuple: (hip_roll, hip_pitch, knee, ankle)
+    shared_state.ik_left_angles = (0.0, 0.15, 0.25, 0.0)   # slightly different from actual
+    shared_state.ik_right_angles = (0.0, 0.15, 0.25, 0.0)
     shared_state.target_torques = {}
 
     # Import after reset to get fresh module state

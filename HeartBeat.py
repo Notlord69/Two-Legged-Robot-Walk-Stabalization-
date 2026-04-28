@@ -44,6 +44,7 @@ from shared_state import (
     SystemStatus,
     ContactState,
     MissionState,
+    StepPhase,
     URDF_JOINT_NAMES,
     URDF_JOINT_LIMITS,
     DEFAULT_LINK_DATA,
@@ -55,7 +56,7 @@ import sim.interface
 import perception
 import stability
 import recovery
-import active_balance
+import balance_controller
 import grf
 import gait_planner
 import mission
@@ -82,15 +83,18 @@ WBC_KD: float = 28.0    # N·m·s/rad, joint velocity derivative gain (ζ ≈ 0.
 
 # WBC joint mapping: (IK angle index, URDF joint name, sign)
 # sign: +1 for right (axis +X), -1 for left (axis -X)
+# Tuple order: (hip_roll, hip_pitch, knee, ankle) = indices 0, 1, 2, 3
 _WBC_LEFT_JOINTS = [
-    (0, 'Left_Hip_Forwards', -1.0),   # hip_pitch  (axis = -X)
-    (1, 'Left_Knee',         -1.0),   # knee       (axis = -X)
-    (2, 'Left_Ankle',        -1.0),   # ankle      (axis ≈ -Z, neutral = 0)
+    (0, 'Left_Hip_Inwards',  -1.0),   # hip_roll   (axis = -Y, adduction)
+    (1, 'Left_Hip_Forwards', -1.0),   # hip_pitch  (axis = -X)
+    (2, 'Left_Knee',         -1.0),   # knee       (axis = -X)
+    (3, 'Left_Ankle',        -1.0),   # ankle      (axis ≈ -Z, neutral = 0)
 ]
 _WBC_RIGHT_JOINTS = [
-    (0, 'Right_Hip_Fowards', +1.0),   # hip_pitch  (axis = +X)
-    (1, 'Right_Knee',        +1.0),   # knee       (axis = +X)
-    (2, 'Right_Ankle',       +1.0),   # ankle      (axis ≈ -Z, neutral = 0)
+    (0, 'Right_Hip_Inwards', -1.0),   # hip_roll   (axis = -Y, adduction)
+    (1, 'Right_Hip_Fowards', +1.0),   # hip_pitch  (axis = +X)
+    (2, 'Right_Knee',        +1.0),   # knee       (axis = +X)
+    (3, 'Right_Ankle',       +1.0),   # ankle      (axis ≈ -Z, neutral = 0)
 ]
 
 
@@ -261,6 +265,20 @@ def _clip_position(joint_name: str, value: float) -> float:
     if value > hi:
         return hi
     return value
+
+
+def _saturate_hip_pitch(wbc_tau: float, grf_tau: float,
+                        emergency_tau: float, effort_limit: float) -> float:
+    """Scale WBC down if total exceeds limit. Preserve safety + feedforward."""
+    total = wbc_tau + grf_tau + emergency_tau
+    if abs(total) <= effort_limit:
+        return total
+    protected = grf_tau + emergency_tau
+    remaining = effort_limit * np.sign(total) - protected
+    if abs(wbc_tau) > 1e-6:
+        scale = min(1.0, abs(remaining / wbc_tau))
+        return protected + wbc_tau * scale
+    return float(np.clip(protected, -effort_limit, effort_limit))
 
 
 # ============================================================================
@@ -440,18 +458,49 @@ class PyBulletInterface:
         torques  = getattr(self.shared_state, 'target_torques', {})
         grf_corr = getattr(self.shared_state, 'grf_torque_correction', {})
 
+        # Hip roll joints use POSITION_CONTROL to override PyBullet's default motor.
+        # Target angles from balance_controller via shared_state.
+        hip_roll_joints = {
+            'Left_Hip_Inwards':  self.shared_state.balance_hip_roll_left,
+            'Right_Hip_Inwards': self.shared_state.balance_hip_roll_right,
+        }
+        for jname, target_pos in hip_roll_joints.items():
+            jid = self.joint_ids.get(jname)
+            if jid is None:
+                continue
+            clamped_pos = _clip_position(jname, target_pos)
+            p.setJointMotorControl2(
+                rid, jid,
+                controlMode=p.POSITION_CONTROL,
+                targetPosition=clamped_pos,
+                force=100.0,  # max motor force (URDF effort limit)
+                positionGain=1.0,  # P gain, dimensionless (stiff)
+                velocityGain=0.5,  # D gain, dimensionless (damped)
+                physicsClientId=pc,
+            )
+
+        emergency = getattr(self.shared_state, 'emergency_sagittal_torque', {})
+
         for jname, raw_torque in torques.items():
             jid = self.joint_ids.get(jname)
             if jid is None:
                 continue
-            # Merge GRF additive correction and clip to URDF effort limit
-            merged  = raw_torque + grf_corr.get(jname, 0.0)
-            # NaN guard: _clip_effort is NaN-transparent (Python > / < return False
-            # for NaN), so a NaN torque would reach PyBullet and crash the process.
-            # Zero the joint and emit a warning instead of crashing.
+            if jname in hip_roll_joints:
+                continue
+
+            grf_val = grf_corr.get(jname, 0.0)
+            emerg_val = emergency.get(jname, 0.0)
+
+            # Saturation-aware merge for hip pitch joints
+            if jname in ('Left_Hip_Forwards', 'Right_Hip_Fowards') and abs(emerg_val) > 1e-6:
+                lim = URDF_JOINT_LIMITS.get(jname, {}).get('effort', 100.0)
+                merged = _saturate_hip_pitch(raw_torque, grf_val, emerg_val, lim)
+            else:
+                merged = raw_torque + grf_val + emerg_val
+
             if not math.isfinite(merged):
                 print(f"[SANITY] NaN/Inf torque on {jname}: raw={raw_torque} "
-                      f"grf={grf_corr.get(jname, 0.0)} — zeroed to prevent crash")
+                      f"grf={grf_val} emerg={emerg_val} — zeroed to prevent crash")
                 merged = 0.0
             clipped = _clip_effort(jname, merged)
             p.setJointMotorControl2(
@@ -589,38 +638,47 @@ class Siclo1Controller:
         Computes PD torque for each leg joint and adds to shared_state.target_torques.
         GRF corrections are NOT merged here — handled in apply_control().
         """
-        torques = getattr(shared_state, 'target_torques', {})
+        shared_state.target_torques = {}
+        torques = shared_state.target_torques
 
         jp = shared_state.joint_positions
         jv = shared_state.joint_velocities
 
         for idx, jname, _ in _WBC_LEFT_JOINTS:
+            kp = WBC_KP
+            kd = WBC_KD
+
             theta_target = shared_state.ik_left_angles[idx]
+            if idx == 1:  # hip_pitch — add sagittal balance offset
+                theta_target += shared_state.sagittal_pitch_offset
             theta_now    = jp.get(jname, 0.0)
             omega_now    = jv.get(jname, 0.0)
             error = theta_target - theta_now
-            tau = WBC_KP * error - WBC_KD * omega_now
+            tau = kp * error - kd * omega_now
             clipped_tau = _clip_effort(jname, tau)
-            torques[jname] = torques.get(jname, 0.0) + clipped_tau
+            torques[jname] = clipped_tau
             # Tracking telemetry
             shared_state.wbc_tracking_error[jname] = error
             lim = URDF_JOINT_LIMITS.get(jname, {}).get('effort', 100.0)
             shared_state.wbc_torque_saturated[jname] = (abs(tau) >= lim - 0.1)
 
         for idx, jname, _ in _WBC_RIGHT_JOINTS:
+            kp = WBC_KP
+            kd = WBC_KD
+
             theta_target = shared_state.ik_right_angles[idx]
+            if idx == 1:  # hip_pitch — add sagittal balance offset
+                theta_target += shared_state.sagittal_pitch_offset
             theta_now    = jp.get(jname, 0.0)
             omega_now    = jv.get(jname, 0.0)
             error = theta_target - theta_now
-            tau = WBC_KP * error - WBC_KD * omega_now
+            tau = kp * error - kd * omega_now
             clipped_tau = _clip_effort(jname, tau)
-            torques[jname] = torques.get(jname, 0.0) + clipped_tau
+            torques[jname] = clipped_tau
             # Tracking telemetry
             shared_state.wbc_tracking_error[jname] = error
             lim = URDF_JOINT_LIMITS.get(jname, {}).get('effort', 100.0)
             shared_state.wbc_torque_saturated[jname] = (abs(tau) >= lim - 0.1)
-
-        shared_state.target_torques = torques
 
         # Periodic WBC telemetry logging (every 50 cycles = 0.5s)
         if shared_state.cycle_count % 50 == 0:
@@ -641,7 +699,7 @@ class Siclo1Controller:
             self.pybullet.update_link_positions()
             perception.update_perception()
             stability.update_stability(dt=TARGET_DT)
-            active_balance.update_active_balance()
+            balance_controller.update_balance()
             grf.update_grf()
             gait_planner.update_gait_planner()
             self._mission.update()
@@ -649,6 +707,10 @@ class Siclo1Controller:
             recovery.update_recovery()
             self.pybullet.apply_control()
             sim.interface.step_simulation(self.physics_client)
+
+        # Reset gait planner and balance controller after warmup
+        gait_planner.reset_gait_planner()
+        balance_controller.reset_balance()
 
     # ------------------------------------------------------------------ #
     def step(self) -> bool:
@@ -698,8 +760,8 @@ class Siclo1Controller:
             shared_state.add_error_code(ERR_MID_CYCLE_OVERRUN)
             shared_state.timing_violation_this_cycle = True
 
-        # 6. Active balance
-        active_balance.update_active_balance()
+        # 6. Balance controller (unified lateral + sagittal)
+        balance_controller.update_balance()
         shared_state._stage_times[4] = time.perf_counter() - self.heartbeat.cycle_start
 
         # 7. GRF — virtual spring-damper torque corrections
@@ -757,21 +819,110 @@ class Siclo1Controller:
                 f"[STAGE] worst={_worst_stage}  {_worst_ms:.2f} ms"
             )
 
-        # 17. Write telemetry (zero-alloc: reuse scratch row)
+        # 17. Write telemetry (zero-alloc: reuse scratch row, 72 columns)
         row = shared_state._telem_row
+        # Core timing & state (0-15)
         row[0] = shared_state.sim_time
         row[1] = shared_state.cycle_count
         row[2] = 0  # error code (set below if violation)
         row[3] = shared_state.com_position[0]
         row[4] = shared_state.com_position[1]
         row[5] = shared_state.com_position[2]
-        row[6] = shared_state.left_foot_contact_state.value
-        row[7] = shared_state.right_foot_contact_state.value
-        row[8] = shared_state.stability_status.value
-        row[9] = shared_state.left_foot_force
-        row[10] = shared_state.right_foot_force
-        row[11] = shared_state.stability_margin
-        row[12] = comp_time * 1e6  # microseconds
+        row[6] = shared_state.com_velocity[0]
+        row[7] = shared_state.com_velocity[1]
+        row[8] = shared_state.com_velocity[2]
+        row[9] = shared_state.left_foot_contact_state.value
+        row[10] = shared_state.right_foot_contact_state.value
+        row[11] = shared_state.stability_status.value
+        row[12] = shared_state.left_foot_force
+        row[13] = shared_state.right_foot_force
+        row[14] = shared_state.stability_margin
+        row[15] = comp_time * 1e6  # microseconds
+
+        # Base angular velocity (16-18)
+        row[16] = shared_state.base_angular_velocity[0]
+        row[17] = shared_state.base_angular_velocity[1]
+        row[18] = shared_state.base_angular_velocity[2]
+
+        # Joint angles - actual (19-24)
+        jp = shared_state.joint_positions
+        row[19] = jp.get('Left_Hip_Forwards', 0.0)
+        row[20] = jp.get('Left_Knee', 0.0)
+        row[21] = jp.get('Left_Ankle', 0.0)
+        row[22] = jp.get('Right_Hip_Fowards', 0.0)
+        row[23] = jp.get('Right_Knee', 0.0)
+        row[24] = jp.get('Right_Ankle', 0.0)
+
+        # IK commanded angles (25-32) - (hip_roll, hip_pitch, knee, ankle) per side
+        ik_l = shared_state.ik_left_angles
+        ik_r = shared_state.ik_right_angles
+        row[25] = ik_l[0] if len(ik_l) > 0 else 0.0  # L hip_roll
+        row[26] = ik_l[1] if len(ik_l) > 1 else 0.0  # L hip_pitch
+        row[27] = ik_l[2] if len(ik_l) > 2 else 0.0  # L knee
+        row[28] = ik_l[3] if len(ik_l) > 3 else 0.0  # L ankle
+        row[29] = ik_r[0] if len(ik_r) > 0 else 0.0  # R hip_roll
+        row[30] = ik_r[1] if len(ik_r) > 1 else 0.0  # R hip_pitch
+        row[31] = ik_r[2] if len(ik_r) > 2 else 0.0  # R knee
+        row[32] = ik_r[3] if len(ik_r) > 3 else 0.0  # R ankle
+
+        # WBC tracking error (33-38)
+        te = shared_state.wbc_tracking_error
+        row[33] = te.get('Left_Hip_Forwards', 0.0)
+        row[34] = te.get('Left_Knee', 0.0)
+        row[35] = te.get('Left_Ankle', 0.0)
+        row[36] = te.get('Right_Hip_Fowards', 0.0)
+        row[37] = te.get('Right_Knee', 0.0)
+        row[38] = te.get('Right_Ankle', 0.0)
+
+        # Torque saturation flags (39-44)
+        ts = shared_state.wbc_torque_saturated
+        row[39] = 1.0 if ts.get('Left_Hip_Forwards', False) else 0.0
+        row[40] = 1.0 if ts.get('Left_Knee', False) else 0.0
+        row[41] = 1.0 if ts.get('Left_Ankle', False) else 0.0
+        row[42] = 1.0 if ts.get('Right_Hip_Fowards', False) else 0.0
+        row[43] = 1.0 if ts.get('Right_Knee', False) else 0.0
+        row[44] = 1.0 if ts.get('Right_Ankle', False) else 0.0
+
+        # Applied torques (45-50)
+        jt = shared_state.joint_torques
+        row[45] = jt.get('Left_Hip_Forwards', 0.0)
+        row[46] = jt.get('Left_Knee', 0.0)
+        row[47] = jt.get('Left_Ankle', 0.0)
+        row[48] = jt.get('Right_Hip_Fowards', 0.0)
+        row[49] = jt.get('Right_Knee', 0.0)
+        row[50] = jt.get('Right_Ankle', 0.0)
+
+        # Gait state (51-55)
+        row[51] = shared_state.step_phase.value
+        row[52] = shared_state.swing_phase
+        row[53] = 0.0 if shared_state.active_swing_side == 'left' else 1.0
+        row[54] = shared_state.mission_state.value
+        row[55] = shared_state.ramp_gain
+
+        # Foot positions - actual (56-61)
+        row[56] = shared_state.left_foot_position[0]
+        row[57] = shared_state.left_foot_position[1]
+        row[58] = shared_state.left_foot_position[2]
+        row[59] = shared_state.right_foot_position[0]
+        row[60] = shared_state.right_foot_position[1]
+        row[61] = shared_state.right_foot_position[2]
+
+        # Foot targets (62-67)
+        lft = shared_state.left_foot_target
+        rft = shared_state.right_foot_target
+        row[62] = lft[0]
+        row[63] = lft[1]
+        row[64] = lft[2]
+        row[65] = rft[0]
+        row[66] = rft[1]
+        row[67] = rft[2]
+
+        # Capture point & slip (68-71)
+        row[68] = shared_state.capture_point[0]
+        row[69] = shared_state.capture_point[1]
+        row[70] = 1.0 if shared_state.left_foot_slip_detected else 0.0
+        row[71] = 1.0 if shared_state.right_foot_slip_detected else 0.0
+
         if violation:
             row[2] = ERR_TIMING_VIOLATION
         shared_state.telemetry.write(row)
