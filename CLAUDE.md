@@ -50,28 +50,27 @@ KEY LINE:  [the single most important line, with inline comment]
 ## LLM Wiki (Obsidian Knowledge Base)
 
 ### Paths
-- **Wiki root**: `C:\Siclo1_V1_Vault\Siclo1 Brain\`
+- **Wiki root**:`C:\Siclo1_V1_Vault\Siclo1 Brain\wiki`
 - **WSL workspace**: `\\wsl.localhost\Ubuntu-22.04\home\notlord\ros2_ws\Siclo1_V1\`
 - **Raw source mirror**: `C:\Siclo1_V1_Vault\Siclo1 Brain\raw\`
 - **Sync script**: `C:\Siclo1_V1_Vault\Siclo1 Brain\scripts\sync-from-wsl.sh`
 
 ### Mandatory Session Protocol
 
-**On every session start**, before writing any code or making any plan:
-1. Read the wiki. Navigate `Siclo1 Brain/` and read all relevant notes.
+**Before writing any code or making any plan**:
+1. Read the wiki. Navigate `wiki/` and read all relevant notes.
 2. Cross-reference the task against what the wiki says. If there is a conflict between the wiki and the user's description, surface it before proceeding.
 
 **Access rules (strictly enforced):**
-- Wiki is **read-only**. Claude must never edit, delete, or create files inside `Siclo1 Brain/`, with one exception below.
+- Wiki is **read-only**. Claude must never edit, delete, or create files inside `wiki/`, with one exception below.
 - Claude may **execute** `scripts/sync-from-wsl.sh` when a refresh is warranted.
 
 ### When to Trigger a Wiki Refresh
 
 Run `bash "C:\Siclo1_V1_Vault\Siclo1 Brain\scripts\sync-from-wsl.sh"` when any of the following is true:
-- A file or module is referenced in conversation that does not appear in `raw/`
-- The user mentions recent changes (new files, refactors, renames) not reflected in the wiki
-- The timestamps in `raw/` are older than the session warrants for an active dev task
-- Claude is about to make architectural decisions and the wiki state feels uncertain
+- The user mentions recent changes (new files, refactors, renames) not reflected in the wiki.
+- The timestamps in `raw/` are older than the session warrants for an active dev task.
+- The user asks to update the wiki.
 
 After running the sync, re-read any notes that reference the updated files before continuing.
 
