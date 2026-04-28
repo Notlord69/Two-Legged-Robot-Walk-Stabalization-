@@ -31,12 +31,44 @@ from shared_state import Siclo1State, ERR_TIMING_VIOLATION
 
 WARMUP_CYCLES: int = 50  # cycles — excluded from performance statistics
 
-# 16-column header matching TelemetryRingBuffer.COLS layout in shared_state.py
+# 72-column header matching TelemetryRingBuffer.COLS layout in shared_state.py
 CSV_HEADER: str = (
-    "timestamp_s,cycle,error_code,com_x,com_y,com_z,"
+    # Core timing & state (0-15)
+    "timestamp_s,cycle,error_code,"
+    "com_x,com_y,com_z,"
+    "com_vel_x,com_vel_y,com_vel_z,"
     "left_contact,right_contact,stability_status,"
     "left_force_n,right_force_n,stability_margin_m,"
-    "compute_us,extra_0,extra_1,extra_2"
+    "compute_us,"
+    # Base angular velocity (16-18)
+    "base_ang_vel_x,base_ang_vel_y,base_ang_vel_z,"
+    # Joint angles - actual (19-24)
+    "L_hip_fwd_rad,L_knee_rad,L_ankle_rad,"
+    "R_hip_fwd_rad,R_knee_rad,R_ankle_rad,"
+    # IK commanded angles (25-32)
+    "ik_L_hip_roll,ik_L_hip_pitch,ik_L_knee,ik_L_ankle,"
+    "ik_R_hip_roll,ik_R_hip_pitch,ik_R_knee,ik_R_ankle,"
+    # WBC tracking error (33-38)
+    "err_L_hip_fwd,err_L_knee,err_L_ankle,"
+    "err_R_hip_fwd,err_R_knee,err_R_ankle,"
+    # Torque saturation flags (39-44)
+    "sat_L_hip_fwd,sat_L_knee,sat_L_ankle,"
+    "sat_R_hip_fwd,sat_R_knee,sat_R_ankle,"
+    # Applied torques (45-50)
+    "tau_L_hip_fwd,tau_L_knee,tau_L_ankle,"
+    "tau_R_hip_fwd,tau_R_knee,tau_R_ankle,"
+    # Gait state (51-55)
+    "step_phase,swing_phase,swing_side,"
+    "mission_state,ramp_gain,"
+    # Foot positions - actual (56-61)
+    "L_foot_x,L_foot_y,L_foot_z,"
+    "R_foot_x,R_foot_y,R_foot_z,"
+    # Foot targets (62-67)
+    "L_target_x,L_target_y,L_target_z,"
+    "R_target_x,R_target_y,R_target_z,"
+    # Capture point & slip (68-71)
+    "capture_pt_x,capture_pt_y,"
+    "L_slip,R_slip"
 )
 
 
@@ -74,7 +106,7 @@ class SessionLogger:
         return self._session_path
 
     def append_row(self, row: np.ndarray) -> None:
-        """Write one 16-column telemetry row to CSV. No-op if file unavailable."""
+        """Write one 72-column telemetry row to CSV. No-op if file unavailable."""
         if self._csv is None:
             return
         self._csv.write(','.join(f'{v:.6g}' for v in row) + '\n')
@@ -223,22 +255,36 @@ class TelemetryThread(threading.Thread):
             self._session.append_row(row)
             self._total_cycles += 1
 
-            ts, cycle, err, cx, cy, cz, lc, rc, stab, lf, rf, margin, comp_us, *_ = row
+            # Unpack key columns (72-col layout, see shared_state.py)
+            ts       = row[0]   # timestamp_s
+            cycle    = row[1]   # cycle
+            err      = row[2]   # error_code
+            cx, cy, cz = row[3], row[4], row[5]    # com position
+            lc       = row[9]   # left_contact
+            rc       = row[10]  # right_contact
+            stab     = row[11]  # stability_status
+            lf       = row[12]  # left_force_n
+            rf       = row[13]  # right_force_n
+            margin   = row[14]  # stability_margin_m
+            comp_us  = row[15]  # compute_us
+            step_ph  = row[51]  # step_phase
+            swing_ph = row[52]  # swing_phase
 
-            # Human-readable in-memory log (unchanged from HeartBeat.py)
+            # Human-readable in-memory log (key fields only)
             line = (f"[t={ts:7.3f}s c={int(cycle):>6d}] "
                     f"COM=[{cx:+.3f},{cy:+.3f},{cz:+.3f}] "
                     f"L={int(lc)} R={int(rc)} Stab={int(stab)} "
                     f"F=[{lf:.0f},{rf:.0f}] "
                     f"margin={margin:.4f} "
-                    f"compute={comp_us:.0f}\u00b5s")
+                    f"phase={int(step_ph)} swing={swing_ph:.2f} "
+                    f"compute={comp_us:.0f}us")
             if int(err) > 0:
                 line += f" ERR={int(err)}"
             self._log_lines.append(line)
 
             # Post-warmup accumulation: strict greater-than (cycle 50 is warmup)
             if cycle > WARMUP_CYCLES:
-                compute_s = comp_us / 1_000_000.0   # µs → seconds
+                compute_s = comp_us / 1_000_000.0   # us -> seconds
                 self._analyzed_cycles += 1
                 self._sum_compute     += compute_s
                 self._sum_sq_compute  += compute_s * compute_s
