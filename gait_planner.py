@@ -76,6 +76,8 @@ FORCE_BALANCE_FLOOR:    float = 10.0   # N, minimum per-foot force before ratio 
 SETTLE_VEL_THRESHOLD:   float = 0.05   # m/s, foot considered settled below this
 PLACE_ENTRY_PHI:        float = 0.85   # dimensionless, phi at which SWING → PLACE
 
+COM_SHIFT_SAGITTAL_THRESHOLD: float = 0.05  # m, wider than lateral because sagittal dynamics are faster
+
 # Hip link names in shared_state.link_positions (verified HeartBeat.py 2026-04-05)
 _LEFT_HIP_LINK:  str = "Left_Upper_Leg_1"
 _RIGHT_HIP_LINK: str = "Right_Upper_Leg_1"
@@ -132,6 +134,8 @@ class GaitPlannerController:
 
     def __init__(self):
         self._ds_lock_pending: bool = True  # lock stance foot on first DS cycle
+        self._locked_stance_ik: tuple = (0.0, 0.0, 0.0)  # (hip_pitch, knee, ankle) at COM_SHIFT entry
+        self._com_shift_ik_locked: bool = False
 
     # ── Public entry point ────────────────────────────────────────────────────
 
@@ -189,9 +193,15 @@ class GaitPlannerController:
         """Recompute stance leg IK from locked world-frame anchor.
 
         Runs every cycle in every phase for the stance leg.
-        Stance foot is never frozen — WBC always gets a valid target.
         """
         stance_side = shared_state.stance_side
+
+        # Hip roll from balance_controller via shared_state
+        if stance_side == "left":
+            stance_roll = shared_state.balance_hip_roll_left
+        else:
+            stance_roll = shared_state.balance_hip_roll_right
+
         hip_key = (_LEFT_HIP_LINK if stance_side == "left"
                    else _RIGHT_HIP_LINK)
         hip_pos = shared_state.link_positions.get(hip_key, np.zeros(3))
@@ -205,11 +215,14 @@ class GaitPlannerController:
             rel_z,
         )
         try:
-            angles = kinematics.solve_ik(foot_xyz_rel, stance_side)
+            ik_angles = kinematics.solve_ik(foot_xyz_rel, stance_side)
         except ValueError:
-            angles = (0.0, 0.0, 0.0)
+            ik_angles = (0.0, 0.0, 0.0)
+
+        # Build 4-tuple: (hip_roll, hip_pitch, knee, ankle)
+        angles = (stance_roll, ik_angles[0], ik_angles[1], ik_angles[2])
         if stance_side == "left":
-            shared_state.ik_left_angles  = angles
+            shared_state.ik_left_angles = angles
         else:
             shared_state.ik_right_angles = angles
 
@@ -226,22 +239,27 @@ class GaitPlannerController:
     def _update_non_stance_ik_from_joints(self) -> None:
         """Update non-stance leg IK from current joint positions each cycle.
 
-        Called during DOUBLE_SUPPORT to keep non-stance leg IK matching actual
-        joint positions. This prevents WBC from generating torques that fight
-        against the current leg pose.
+        Called during DOUBLE_SUPPORT and COM_SHIFT to keep non-stance leg IK
+        matching actual joint positions. This prevents WBC from generating
+        torques that fight against the current leg pose.
         """
         stance_side = shared_state.stance_side
         jp = shared_state.joint_positions
+
         if stance_side == "right":
             # Non-stance is left
+            swing_roll = shared_state.balance_hip_roll_left
             shared_state.ik_left_angles = (
+                swing_roll,
                 jp.get('Left_Hip_Forwards', 0.0),
                 jp.get('Left_Knee', 0.0),
                 jp.get('Left_Ankle', 0.0),
             )
         else:
             # Non-stance is right
+            swing_roll = shared_state.balance_hip_roll_right
             shared_state.ik_right_angles = (
+                swing_roll,
                 jp.get('Right_Hip_Fowards', 0.0),
                 jp.get('Right_Knee', 0.0),
                 jp.get('Right_Ankle', 0.0),
@@ -291,9 +309,14 @@ class GaitPlannerController:
 
         timer    = shared_state.step_phase_timer
         stable   = (shared_state.stability_status != StabilityStatus.UNSTABLE)
-        cp_close = (np.linalg.norm(
-            shared_state.capture_point - shared_state.stance_foot_world_pos[:2]
-        ) < COM_SHIFT_THRESHOLD)
+
+        cp_close_lateral = abs(
+            shared_state.capture_point[0] - shared_state.stance_foot_world_pos[0]
+        ) < COM_SHIFT_THRESHOLD
+        cp_close_sagittal = abs(
+            shared_state.capture_point[1] - shared_state.stance_foot_world_pos[1]
+        ) < COM_SHIFT_SAGITTAL_THRESHOLD
+        cp_close = cp_close_lateral and cp_close_sagittal
 
         if stable and cp_close:
             self._transition_to(StepPhase.LIFT)
@@ -426,11 +449,17 @@ class GaitPlannerController:
             return   # invalid geometry; hold last angles
         foot_xyz_rel = (x_swing - hip_x, 0.0, rel_z)
         try:
-            angles = kinematics.solve_ik(foot_xyz_rel, side)
+            ik_angles = kinematics.solve_ik(foot_xyz_rel, side)
         except ValueError:
-            angles = (0.0, 0.0, 0.0)
+            ik_angles = (0.0, 0.0, 0.0)
+
+        # Swing leg hip roll: zero during swing (leg returns to neutral)
+        hip_roll = 0.0
+
+        # Build 4-tuple: (hip_roll, hip_pitch, knee, ankle)
+        angles = (hip_roll, ik_angles[0], ik_angles[1], ik_angles[2])
         if side == "left":
-            shared_state.ik_left_angles  = angles
+            shared_state.ik_left_angles = angles
         else:
             shared_state.ik_right_angles = angles
 
@@ -495,3 +524,14 @@ _gait_planner = GaitPlannerController()
 def update_gait_planner() -> None:
     """Called by HeartBeat.py once per 100 Hz cycle."""
     _gait_planner.update()
+
+
+def reset_gait_planner() -> None:
+    """Reset gait planner state after warmup.
+
+    Called by HeartBeat after warmup to ensure stance foot is locked fresh
+    using the stabilized foot position, not the bouncing warmup position.
+    """
+    _gait_planner._ds_lock_pending = True
+    _gait_planner._com_shift_ik_locked = False
+    shared_state.stance_foot_world_pos = np.zeros(3)

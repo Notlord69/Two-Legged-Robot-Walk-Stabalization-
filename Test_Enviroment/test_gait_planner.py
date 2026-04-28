@@ -118,13 +118,13 @@ def test_swing_side_swaps_after_step():
 
 
 def test_ik_angles_written_for_active_swing():
-    """After one update in WALK, ik_left_angles is a 3-tuple of floats."""
+    """After one update in WALK, ik_left_angles is a 4-tuple of floats."""
     from gait_planner import update_gait_planner
     _reset_for_planner()
     shared_state.swing_phase = 0.0
     update_gait_planner()
     angles = shared_state.ik_left_angles
-    assert len(angles) == 3
+    assert len(angles) == 4  # (hip_roll, hip_pitch, knee, ankle)
     assert all(isinstance(a, float) for a in angles)
 
 

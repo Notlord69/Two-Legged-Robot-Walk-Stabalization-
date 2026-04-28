@@ -50,13 +50,13 @@ def test_stance_foot_world_pos_not_modified_during_swing():
 def test_stance_ik_recomputed_every_swing_cycle():
     """Stance IK angles must be written on every SWING cycle."""
     _reset()
-    shared_state.ik_right_angles = (0.0, 0.0, 0.0)   # start at zero
+    shared_state.ik_right_angles = (0.0, 0.0, 0.0, 0.0)   # start at zero (4-tuple)
     with patch('kinematics.solve_ik', return_value=(0.1, 0.2, 0.3)) as mock_ik:
         gait_planner.update_gait_planner()
     # solve_ik called at least once (for stance leg)
     assert mock_ik.call_count >= 1
-    # right (stance) angles updated
-    assert shared_state.ik_right_angles == (0.1, 0.2, 0.3)
+    # right (stance) angles updated: (hip_roll=0, hip_pitch, knee, ankle)
+    assert shared_state.ik_right_angles == (0.0, 0.1, 0.2, 0.3)
 
 
 def test_stance_foot_locked_once_at_ds_entry():
