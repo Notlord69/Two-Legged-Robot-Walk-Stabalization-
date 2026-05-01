@@ -22,6 +22,8 @@ Date: April 2026
 from enum import IntEnum, auto
 from typing import Dict, Tuple, NamedTuple
 
+import numpy as np
+
 
 # ============================================================================
 # ENUMS
@@ -116,7 +118,150 @@ def compute_confidence(measured: float, optimal: float,
     return 0.0
 
 
-import numpy as np
+# ============================================================================
+# SIGNAL SPECIFICATION
+# ============================================================================
+
+class SignalSpec(NamedTuple):
+    """Expected value and confidence thresholds for one signal in one regime."""
+    optimal: float
+    acceptable_band: float
+    threshold_05: float
+    threshold_00: float
+
+    def evaluate(self, measured: float) -> float:
+        return compute_confidence(measured, self.optimal,
+                                  self.acceptable_band,
+                                  self.threshold_05,
+                                  self.threshold_00)
+
+
+# ============================================================================
+# REGIME PROFILES — all thresholds derived in the spec
+# ============================================================================
+
+# Shared signal specs reused across regimes
+_BASE_Z_IDLE       = SignalSpec(0.88, 0.02, 0.05, 0.15)
+_BASE_Z_RAMP       = SignalSpec(0.88, 0.03, 0.06, 0.25)
+_BASE_Z_DS         = SignalSpec(0.86, 0.04, 0.08, 0.26)
+_BASE_Z_SHIFT      = SignalSpec(0.86, 0.04, 0.08, 0.26)
+_BASE_Z_LIFT       = SignalSpec(0.85, 0.04, 0.08, 0.25)
+_BASE_Z_SWING      = SignalSpec(0.84, 0.05, 0.10, 0.29)
+_BASE_Z_PLACE      = SignalSpec(0.84, 0.05, 0.10, 0.29)
+_BASE_Z_RAMP_DOWN  = SignalSpec(0.87, 0.03, 0.06, 0.27)
+_BASE_Z_FROZEN     = SignalSpec(0.50, 0.50, 0.50, 0.50)
+
+_ANG_VEL_IDLE      = SignalSpec(0.0, 0.1, 0.5, 1.0)
+_ANG_VEL_RAMP      = SignalSpec(0.0, 0.3, 0.8, 1.5)
+_ANG_VEL_DS        = SignalSpec(0.0, 0.5, 1.0, 2.0)
+_ANG_VEL_SHIFT     = SignalSpec(0.0, 0.8, 1.5, 2.5)
+_ANG_VEL_SWING     = SignalSpec(0.0, 1.0, 2.0, 3.0)
+_ANG_VEL_FROZEN    = SignalSpec(0.0, 3.0, 3.0, 5.0)
+
+_FORCE_DS          = SignalSpec(39.7, 12.0, 20.0, 34.7)
+_FORCE_DS_WIDE     = SignalSpec(39.7, 15.0, 25.0, 34.7)
+_FORCE_STANCE      = SignalSpec(79.5, 24.5, 44.5, 69.5)
+_FORCE_STANCE_WIDE = SignalSpec(79.5, 30.0, 50.0, 69.5)
+_FORCE_SWING_ZERO  = SignalSpec(0.0, 0.0, 3.0, 10.0)
+
+_WBC_ERR_IDLE      = SignalSpec(0.0, 0.05, 0.2, 0.5)
+_WBC_ERR_RAMP      = SignalSpec(0.0, 0.1, 0.3, 0.5)
+_WBC_ERR_DS        = SignalSpec(0.0, 0.15, 0.3, 0.5)
+_WBC_ERR_SWING     = SignalSpec(0.0, 0.2, 0.6, 1.0)
+
+_RAMP_GAIN_ZERO    = SignalSpec(0.0, 0.0, 0.0, 0.5)
+_RAMP_GAIN_FULL    = SignalSpec(1.0, 0.0, 0.0, 0.5)
+
+_N_CONTACTS_2      = SignalSpec(2.0, 0.0, 1.0, 2.0)
+_N_CONTACTS_1      = SignalSpec(1.0, 0.0, 1.0, 1.0)
+
+
+REGIME_PROFILES: Dict[PrimaryRegime, Dict[str, SignalSpec]] = {
+
+    PrimaryRegime.IDLE_STANDING: {
+        'base_z':              _BASE_Z_IDLE,
+        'angular_velocity':    _ANG_VEL_IDLE,
+        'contact_force_left':  _FORCE_DS,
+        'contact_force_right': _FORCE_DS,
+        'wbc_tracking_error':  _WBC_ERR_IDLE,
+        'ramp_gain':           _RAMP_GAIN_ZERO,
+    },
+
+    PrimaryRegime.RAMP_UP: {
+        'base_z':              _BASE_Z_RAMP,
+        'angular_velocity':    _ANG_VEL_RAMP,
+        'contact_force_left':  _FORCE_DS_WIDE,
+        'contact_force_right': _FORCE_DS_WIDE,
+        'wbc_tracking_error':  _WBC_ERR_RAMP,
+    },
+
+    PrimaryRegime.WALK_DS: {
+        'base_z':              _BASE_Z_DS,
+        'angular_velocity':    _ANG_VEL_DS,
+        'contact_force_left':  _FORCE_DS_WIDE,
+        'contact_force_right': _FORCE_DS_WIDE,
+        'wbc_tracking_error':  _WBC_ERR_DS,
+    },
+
+    PrimaryRegime.WALK_COM_SHIFT: {
+        'base_z':              _BASE_Z_SHIFT,
+        'angular_velocity':    _ANG_VEL_SHIFT,
+        'contact_force_left':  _FORCE_DS_WIDE,
+        'contact_force_right': _FORCE_DS_WIDE,
+        'wbc_tracking_error':  _WBC_ERR_DS,
+    },
+
+    PrimaryRegime.WALK_LIFT: {
+        'base_z':              _BASE_Z_LIFT,
+        'angular_velocity':    _ANG_VEL_SHIFT,
+        'contact_force_stance': _FORCE_STANCE,
+        'contact_force_swing':  _FORCE_SWING_ZERO,
+        'wbc_tracking_error':   _WBC_ERR_DS,
+    },
+
+    PrimaryRegime.WALK_SWING: {
+        'base_z':              _BASE_Z_SWING,
+        'angular_velocity':    _ANG_VEL_SWING,
+        'contact_force_stance': _FORCE_STANCE,
+        'contact_force_swing':  _FORCE_SWING_ZERO,
+        'wbc_tracking_error':   _WBC_ERR_SWING,
+    },
+
+    PrimaryRegime.WALK_PLACE: {
+        'base_z':              _BASE_Z_PLACE,
+        'angular_velocity':    _ANG_VEL_SWING,
+        'contact_force_stance': _FORCE_STANCE_WIDE,
+        'wbc_tracking_error':   _WBC_ERR_SWING,
+    },
+
+    PrimaryRegime.DECEL_SWING: {
+        'base_z':              _BASE_Z_SWING,
+        'angular_velocity':    _ANG_VEL_SWING,
+        'contact_force_stance': _FORCE_STANCE_WIDE,
+        'contact_force_swing':  _FORCE_SWING_ZERO,
+        'wbc_tracking_error':   _WBC_ERR_SWING,
+    },
+
+    PrimaryRegime.DECEL_DS: {
+        'base_z':              _BASE_Z_DS,
+        'angular_velocity':    _ANG_VEL_DS,
+        'contact_force_left':  _FORCE_DS_WIDE,
+        'contact_force_right': _FORCE_DS_WIDE,
+        'wbc_tracking_error':  _WBC_ERR_DS,
+    },
+
+    PrimaryRegime.RAMP_DOWN: {
+        'base_z':              _BASE_Z_RAMP_DOWN,
+        'angular_velocity':    _ANG_VEL_RAMP,
+        'contact_force_left':  _FORCE_DS_WIDE,
+        'contact_force_right': _FORCE_DS_WIDE,
+    },
+
+    PrimaryRegime.FROZEN: {
+        'base_z':              _BASE_Z_FROZEN,
+        'angular_velocity':    _ANG_VEL_FROZEN,
+    },
+}
 
 
 def classify_regime(row: np.ndarray) -> PrimaryRegime:

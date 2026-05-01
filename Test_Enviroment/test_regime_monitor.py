@@ -149,3 +149,62 @@ class TestClassifyRegime:
         row = _make_row()
         row[COL_CYCLE] = 100.0
         assert classify_regime(row) == PrimaryRegime.IDLE_STANDING
+
+
+from regime_monitor import SignalSpec, REGIME_PROFILES
+
+
+class TestSignalSpec:
+
+    def test_evaluate_at_optimal(self):
+        spec = SignalSpec(optimal=0.88, acceptable_band=0.02,
+                          threshold_05=0.05, threshold_00=0.15)
+        assert spec.evaluate(0.88) == 1.0
+
+    def test_evaluate_beyond_threshold(self):
+        spec = SignalSpec(optimal=0.88, acceptable_band=0.02,
+                          threshold_05=0.05, threshold_00=0.15)
+        assert spec.evaluate(0.50) == 0.0
+
+
+class TestRegimeProfiles:
+
+    def test_all_regimes_have_profiles(self):
+        for regime in PrimaryRegime:
+            assert regime in REGIME_PROFILES, f"Missing profile for {regime.name}"
+
+    def test_idle_has_base_z_signal(self):
+        profile = REGIME_PROFILES[PrimaryRegime.IDLE_STANDING]
+        assert 'base_z' in profile
+
+    def test_idle_base_z_optimal(self):
+        spec = REGIME_PROFILES[PrimaryRegime.IDLE_STANDING]['base_z']
+        assert spec.optimal == 0.88
+
+    def test_walk_swing_has_swing_foot_z(self):
+        profile = REGIME_PROFILES[PrimaryRegime.WALK_SWING]
+        assert 'contact_force_stance' in profile
+
+    def test_walk_swing_stance_force_optimal(self):
+        spec = REGIME_PROFILES[PrimaryRegime.WALK_SWING]['contact_force_stance']
+        assert spec.optimal == 79.5
+
+    def test_frozen_has_lenient_thresholds(self):
+        profile = REGIME_PROFILES[PrimaryRegime.FROZEN]
+        spec = profile['base_z']
+        assert spec.threshold_00 >= 0.50
+
+    def test_profile_values_are_signal_specs(self):
+        for regime, profile in REGIME_PROFILES.items():
+            for signal_name, spec in profile.items():
+                assert isinstance(spec, SignalSpec), (
+                    f"{regime.name}.{signal_name} is {type(spec)}, expected SignalSpec"
+                )
+
+    def test_all_specs_have_valid_thresholds(self):
+        for regime, profile in REGIME_PROFILES.items():
+            for signal_name, spec in profile.items():
+                assert spec.acceptable_band <= spec.threshold_05 <= spec.threshold_00, (
+                    f"{regime.name}.{signal_name}: band={spec.acceptable_band} "
+                    f"t05={spec.threshold_05} t00={spec.threshold_00}"
+                )
