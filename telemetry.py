@@ -23,6 +23,7 @@ import numpy as np
 from typing import IO, Optional
 
 from shared_state import Siclo1State, ERR_TIMING_VIOLATION
+from regime_monitor import RegimeMonitor
 
 
 # ============================================================================
@@ -211,6 +212,7 @@ class TelemetryThread(threading.Thread):
         self._log_lines: list = []
         self._argv_command = argv_command   # stored for summary.txt
         self._quiet        = quiet          # suppresses all terminal output
+        self._regime_monitor = RegimeMonitor()
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self._session = SessionLogger(base_dir)
@@ -255,6 +257,9 @@ class TelemetryThread(threading.Thread):
             self._session.append_row(row)
             self._total_cycles += 1
 
+            # Regime classification (10 Hz observer)
+            regime, condition, _conf = self._regime_monitor.classify(row)
+
             # Unpack key columns (72-col layout, see shared_state.py)
             ts       = row[0]   # timestamp_s
             cycle    = row[1]   # cycle
@@ -277,7 +282,8 @@ class TelemetryThread(threading.Thread):
                     f"F=[{lf:.0f},{rf:.0f}] "
                     f"margin={margin:.4f} "
                     f"phase={int(step_ph)} swing={swing_ph:.2f} "
-                    f"compute={comp_us:.0f}us")
+                    f"compute={comp_us:.0f}us "
+                    f"regime={regime.name} cond={condition.name}")
             if int(err) > 0:
                 line += f" ERR={int(err)}"
             self._log_lines.append(line)

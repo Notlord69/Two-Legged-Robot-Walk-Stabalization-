@@ -300,3 +300,43 @@ class TestRegimeMonitor:
         for name, val in conf.items():
             assert isinstance(val, float), f"{name} is {type(val)}"
             assert 0.0 <= val <= 1.0, f"{name} = {val}"
+
+
+class TestTelemetryIntegration:
+    """Verify RegimeMonitor is callable from telemetry drain context."""
+
+    def test_monitor_classify_returns_valid_tuple(self):
+        mon = RegimeMonitor()
+        row = np.zeros(72, dtype=np.float64)
+        row[COL_CYCLE] = 100.0
+        row[COL_COM_Z] = 0.88
+        row[COL_MISSION_STATE] = 1.0
+        row[COL_STEP_PHASE] = 1.0
+        row[COL_LEFT_FORCE] = 39.7
+        row[COL_RIGHT_FORCE] = 39.7
+        result = mon.classify(row)
+        assert len(result) == 3
+        regime, condition, conf = result
+        assert isinstance(regime, PrimaryRegime)
+        assert isinstance(condition, Condition)
+        assert isinstance(conf, dict)
+
+    def test_monitor_processes_batch(self):
+        """Simulate what _format_batch does: classify each row in a batch."""
+        mon = RegimeMonitor()
+        batch = np.zeros((10, 72), dtype=np.float64)
+        for i in range(10):
+            batch[i, COL_CYCLE] = float(100 + i)
+            batch[i, COL_COM_Z] = 0.88
+            batch[i, COL_MISSION_STATE] = 1.0
+            batch[i, COL_STEP_PHASE] = 1.0
+            batch[i, COL_LEFT_FORCE] = 39.7
+            batch[i, COL_RIGHT_FORCE] = 39.7
+
+        results = []
+        for row in batch:
+            results.append(mon.classify(row))
+
+        assert len(results) == 10
+        assert all(r[0] == PrimaryRegime.IDLE_STANDING for r in results)
+        assert all(r[1] == Condition.NOMINAL for r in results)
