@@ -114,3 +114,42 @@ def compute_confidence(measured: float, optimal: float,
     if deviation <= threshold_00:
         return 0.5 * (threshold_00 - deviation) / (threshold_00 - threshold_05)
     return 0.0
+
+
+import numpy as np
+
+
+def classify_regime(row: np.ndarray) -> PrimaryRegime:
+    """Deterministic regime lookup from telemetry row.
+
+    Does NOT detect FROZEN — that requires cross-row cycle staleness
+    detection, handled by RegimeMonitor.classify().
+    """
+    ms = int(row[COL_MISSION_STATE])
+    sp = int(row[COL_STEP_PHASE])
+
+    if ms == _MS_IDLE:
+        return PrimaryRegime.IDLE_STANDING
+    if ms == _MS_RAMP:
+        return PrimaryRegime.RAMP_UP
+    if ms == _MS_STOP:
+        return PrimaryRegime.RAMP_DOWN
+
+    if ms == _MS_WALK:
+        if sp == _SP_DOUBLE_SUPPORT:
+            return PrimaryRegime.WALK_DS
+        if sp == _SP_COM_SHIFT:
+            return PrimaryRegime.WALK_COM_SHIFT
+        if sp == _SP_LIFT:
+            return PrimaryRegime.WALK_LIFT
+        if sp == _SP_SWING:
+            return PrimaryRegime.WALK_SWING
+        if sp == _SP_PLACE:
+            return PrimaryRegime.WALK_PLACE
+
+    if ms == _MS_DECEL:
+        if sp in (_SP_SWING, _SP_PLACE):
+            return PrimaryRegime.DECEL_SWING
+        return PrimaryRegime.DECEL_DS
+
+    return PrimaryRegime.IDLE_STANDING

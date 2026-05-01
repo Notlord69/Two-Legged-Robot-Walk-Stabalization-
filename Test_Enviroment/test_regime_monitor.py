@@ -51,3 +51,101 @@ class TestComputeConfidence:
     def test_zero_band_degenerates_cleanly(self):
         result = compute_confidence(0.88, 0.88, 0.0, 0.05, 0.15)
         assert result == 1.0
+
+
+import numpy as np
+from regime_monitor import classify_regime, COL_MISSION_STATE, COL_STEP_PHASE, COL_CYCLE
+
+
+def _make_row(**overrides) -> np.ndarray:
+    """Build a 72-column telemetry row with sensible defaults."""
+    row = np.zeros(72, dtype=np.float64)
+    row[COL_CYCLE] = 100.0
+    row[COL_MISSION_STATE] = 1.0  # IDLE
+    row[COL_STEP_PHASE] = 1.0    # DOUBLE_SUPPORT
+    for col, val in overrides.items():
+        row[int(col)] = val
+    return row
+
+
+class TestClassifyRegime:
+
+    def test_idle_standing(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 1.0  # IDLE
+        assert classify_regime(row) == PrimaryRegime.IDLE_STANDING
+
+    def test_ramp_up(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 2.0  # RAMP
+        assert classify_regime(row) == PrimaryRegime.RAMP_UP
+
+    def test_walk_double_support(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 3.0  # WALK
+        row[COL_STEP_PHASE] = 1.0     # DOUBLE_SUPPORT
+        assert classify_regime(row) == PrimaryRegime.WALK_DS
+
+    def test_walk_com_shift(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 3.0
+        row[COL_STEP_PHASE] = 2.0     # COM_SHIFT
+        assert classify_regime(row) == PrimaryRegime.WALK_COM_SHIFT
+
+    def test_walk_lift(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 3.0
+        row[COL_STEP_PHASE] = 3.0     # LIFT
+        assert classify_regime(row) == PrimaryRegime.WALK_LIFT
+
+    def test_walk_swing(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 3.0
+        row[COL_STEP_PHASE] = 4.0     # SWING
+        assert classify_regime(row) == PrimaryRegime.WALK_SWING
+
+    def test_walk_place(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 3.0
+        row[COL_STEP_PHASE] = 5.0     # PLACE
+        assert classify_regime(row) == PrimaryRegime.WALK_PLACE
+
+    def test_decel_swing(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 4.0  # DECEL
+        row[COL_STEP_PHASE] = 4.0     # SWING
+        assert classify_regime(row) == PrimaryRegime.DECEL_SWING
+
+    def test_decel_place(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 4.0
+        row[COL_STEP_PHASE] = 5.0     # PLACE
+        assert classify_regime(row) == PrimaryRegime.DECEL_SWING
+
+    def test_decel_ds(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 4.0
+        row[COL_STEP_PHASE] = 1.0     # DOUBLE_SUPPORT
+        assert classify_regime(row) == PrimaryRegime.DECEL_DS
+
+    def test_decel_com_shift(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 4.0
+        row[COL_STEP_PHASE] = 2.0     # COM_SHIFT
+        assert classify_regime(row) == PrimaryRegime.DECEL_DS
+
+    def test_decel_lift(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 4.0
+        row[COL_STEP_PHASE] = 3.0     # LIFT
+        assert classify_regime(row) == PrimaryRegime.DECEL_DS
+
+    def test_ramp_down(self):
+        row = _make_row()
+        row[COL_MISSION_STATE] = 5.0  # STOP
+        assert classify_regime(row) == PrimaryRegime.RAMP_DOWN
+
+    def test_frozen_detected_from_stale_cycle(self):
+        row = _make_row()
+        row[COL_CYCLE] = 100.0
+        assert classify_regime(row) == PrimaryRegime.IDLE_STANDING
