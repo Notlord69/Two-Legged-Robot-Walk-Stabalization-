@@ -70,3 +70,30 @@ _(none)_
 ## Reverted Changes
 
 _(none yet)_
+
+## 2026-04-28 — Drift & Yaw Fix (Symmetry Correction)
+
+**Design spec:** `docs/superpowers/specs/2026-04-28-drift-yaw-fix-design.md`
+
+### Problem
+
+Left leg had spurious X/Y offsets on Knee and Ankle joint origins (Fusion 360 export artifact). Right leg geometry was clean. `Right_Hip_Twist` had an asymmetric lower limit (-2 deg instead of -20 deg).
+
+### Joint Origin Changes
+
+| Joint | Field | Before | After | Rationale |
+|-------|-------|--------|-------|-----------|
+| `Left_Knee` | origin xyz | `0.031 0.000969 -0.052133` | `0.0 0.0 -0.060661` | Match right leg's clean vertical geometry |
+| `Left_Ankle` | origin xyz | `0.1 0.024043 -0.679218` | `0.0 0.0 -0.686961` | Match right leg's clean vertical geometry |
+| `Right_Hip_Twist` | limit lower | `-0.034907` | `-0.349066` | Match left hip twist symmetric +/-20 deg range |
+| `Left_Hip_Twist` | origin xyz Z | `0.98` | `1.018094` | Compensate for left foot height shift (+0.038094 m) |
+
+### Height Compensation
+
+Both Hip_Forwards frames land at Z = 0.917797 m. Both ankles at Z = 0.170175 m.
+
+### What Was NOT Changed
+
+- Joint axes, link masses, link inertia tensors
+- Hip_Inwards / Hip_Forwards origins (within tolerance)
+- Ankle axis Y-component (+/-0.005365, already mirrored correctly)

@@ -398,7 +398,7 @@
     </collision>
   </link>
   <joint name="Left_Hip_Twist" type="revolute">
-    <origin rpy="0 0 0" xyz="0.925 0.2 0.98"/>
+    <origin rpy="0 0 0" xyz="0.925 0.2 1.018094"/>
     <parent link="base_link"/>
     <child link="Yaw_Link_Left_1"/>
     <axis xyz="0.0 0.0 1.0"/>
@@ -419,14 +419,14 @@
     <limit effort="100" lower="-1.570796" upper="1.570796" velocity="100"/>
   </joint>
   <joint name="Left_Knee" type="revolute">
-    <origin rpy="0 0 0" xyz="0.031 0.000969 -0.052133"/>
+    <origin rpy="0 0 0" xyz="0.0 0.0 -0.060661"/>
     <parent link="Left_Upper_Leg_1"/>
     <child link="Left_Lower_Leg_1"/>
     <axis xyz="-1.0 0.0 -0.0"/>
     <limit effort="100" lower="-1.570796" upper="1.570796" velocity="100"/>
   </joint>
   <joint name="Left_Ankle" type="revolute">
-    <origin rpy="0 0 0" xyz="0.1 0.024043 -0.679218"/>
+    <origin rpy="0 0 0" xyz="0.0 0.0 -0.686961"/>
     <parent link="Left_Lower_Leg_1"/>
     <child link="Left_Foot_1"/>
     <axis xyz="0.0 0.005365 -0.999986"/>
@@ -437,7 +437,7 @@
     <parent link="base_link"/>
     <child link="Yaw_Link_Right_1"/>
     <axis xyz="0.0 -0.0 -1.0"/>
-    <limit effort="100" lower="-0.034907" upper="0.349066" velocity="100"/>
+    <limit effort="100" lower="-0.349066" upper="0.349066" velocity="100"/>
   </joint>
   <joint name="Right_Hip_Inwards" type="revolute">
     <origin rpy="0 0 0" xyz="0.0 0.017797 0.08"/>

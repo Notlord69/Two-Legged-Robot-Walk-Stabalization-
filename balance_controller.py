@@ -57,12 +57,16 @@ G: float = 9.81  # m/s², gravitational acceleration
 # ── Lateral axis gains ──────────────────────────────────────────────────────
 LATERAL_ROLL_GAIN: float = 0.8      # rad/m, proportional gain on lateral CP error
 LATERAL_KD: float = 0.1             # rad·s/m, derivative gain on lateral COM velocity
+LATERAL_KI: float = 0.05            # rad/(m·s), integral gain on lateral CP error
+LATERAL_I_MAX: float = 0.04         # rad, anti-windup clamp on integrator output
 HIP_ROLL_MAX: float = 0.25          # rad (~14 deg), hard clip on hip roll position
 HIP_ROLL_RATE_LIMIT: float = 0.03   # rad/cycle, max change per 100 Hz tick
 
 # ── Sagittal axis gains ────────────────────────────────────────────────────
 SAGITTAL_PITCH_GAIN: float = 1.2    # rad/m, proportional gain on sagittal CP error
 SAGITTAL_KD: float = 0.3            # rad·s/m, derivative gain on sagittal COM velocity
+SAGITTAL_KI: float = 0.08           # rad/(m·s), integral gain on sagittal CP error
+SAGITTAL_I_MAX: float = 0.03        # rad, anti-windup clamp on integrator output
 PITCH_OFFSET_MAX: float = 0.15      # rad (~8.6 deg), hard clip on pitch offset
 PITCH_RATE_LIMIT: float = 0.02      # rad/cycle, max change per 100 Hz tick
 
@@ -99,6 +103,8 @@ class BalanceController:
         self._prev_hip_roll_right: float = 0.0  # rad, previous cycle right hip roll
         self._prev_pitch_offset: float = 0.0    # rad, previous cycle pitch offset
         self._in_emergency: bool = False         # emergency sagittal mode flag
+        self._integral_lateral: float = 0.0     # m·s, accumulated lateral CP error
+        self._integral_sagittal: float = 0.0    # m·s, accumulated sagittal CP error
 
     # ------------------------------------------------------------------ #
     # PUBLIC                                                                #
@@ -143,8 +149,15 @@ class BalanceController:
 
     def _update_lateral(self, e_x: float, vx: float) -> None:
         """Compute hip roll targets from lateral CP error."""
-        # PD control: negative feedback to correct lateral lean
-        target_roll = -(LATERAL_ROLL_GAIN * e_x + LATERAL_KD * vx)  # rad
+        DT = 0.01  # s, 100 Hz fixed timestep
+        self._integral_lateral += e_x * DT
+        i_clamp = LATERAL_I_MAX / LATERAL_KI  # m·s, accumulator limit
+        self._integral_lateral = max(-i_clamp, min(i_clamp, self._integral_lateral))
+
+        # PID control: negative feedback to correct lateral lean
+        target_roll = -(LATERAL_ROLL_GAIN * e_x
+                        + LATERAL_KD * vx
+                        + LATERAL_KI * self._integral_lateral)  # rad
 
         # Hard clip
         target_roll = max(-HIP_ROLL_MAX, min(HIP_ROLL_MAX, target_roll))
@@ -184,8 +197,15 @@ class BalanceController:
 
     def _update_sagittal(self, e_y: float, vy: float) -> None:
         """Compute pitch offset and emergency torque from sagittal CP error."""
-        # PD pitch offset
-        raw_offset = -(SAGITTAL_PITCH_GAIN * e_y + SAGITTAL_KD * vy)  # rad
+        DT = 0.01  # s, 100 Hz fixed timestep
+        self._integral_sagittal += e_y * DT
+        i_clamp = SAGITTAL_I_MAX / SAGITTAL_KI  # m·s, accumulator limit
+        self._integral_sagittal = max(-i_clamp, min(i_clamp, self._integral_sagittal))
+
+        # PID pitch offset
+        raw_offset = -(SAGITTAL_PITCH_GAIN * e_y
+                       + SAGITTAL_KD * vy
+                       + SAGITTAL_KI * self._integral_sagittal)  # rad
 
         # Hard clip
         raw_offset = max(-PITCH_OFFSET_MAX, min(PITCH_OFFSET_MAX, raw_offset))
@@ -201,6 +221,7 @@ class BalanceController:
         abs_ey = abs(e_y)
         if not self._in_emergency and abs_ey > EMERGENCY_THRESHOLD:
             self._in_emergency = True
+            self._integral_sagittal = 0.0  # prevent wound-up integrator fighting recovery
         elif self._in_emergency and abs_ey < (EMERGENCY_THRESHOLD - EMERGENCY_HYSTERESIS):
             self._in_emergency = False
 
@@ -308,6 +329,8 @@ class BalanceController:
         self._prev_hip_roll_right = 0.0
         self._prev_pitch_offset = 0.0
         self._in_emergency = False
+        self._integral_lateral = 0.0
+        self._integral_sagittal = 0.0
 
     def reset(self) -> None:
         """Reset internal state and zero all outputs."""

@@ -458,8 +458,9 @@ class PyBulletInterface:
         torques  = getattr(self.shared_state, 'target_torques', {})
         grf_corr = getattr(self.shared_state, 'grf_torque_correction', {})
 
-        # Hip roll joints use POSITION_CONTROL to override PyBullet's default motor.
-        # Target angles from balance_controller via shared_state.
+        # Position-controlled joints: hip roll (balance) + yaw hold (drift fix).
+        # These override PyBullet's default motor; remaining joints use TORQUE_CONTROL from WBC.
+
         hip_roll_joints = {
             'Left_Hip_Inwards':  self.shared_state.balance_hip_roll_left,
             'Right_Hip_Inwards': self.shared_state.balance_hip_roll_right,
@@ -473,19 +474,38 @@ class PyBulletInterface:
                 rid, jid,
                 controlMode=p.POSITION_CONTROL,
                 targetPosition=clamped_pos,
-                force=100.0,  # max motor force (URDF effort limit)
-                positionGain=1.0,  # P gain, dimensionless (stiff)
-                velocityGain=0.5,  # D gain, dimensionless (damped)
+                force=100.0,   # N·m, URDF effort limit
+                positionGain=1.0,
+                velocityGain=0.5,
+                physicsClientId=pc,
+            )
+
+        # Yaw hold: keep Hip_Twist joints at neutral to prevent base rotation.
+        yaw_hold_joints = ('Left_Hip_Twist', 'Right_Hip_Twist')
+        for jname in yaw_hold_joints:
+            jid = self.joint_ids.get(jname)
+            if jid is None:
+                continue
+            p.setJointMotorControl2(
+                rid, jid,
+                controlMode=p.POSITION_CONTROL,
+                targetPosition=0.0,    # rad, hold at neutral
+                force=50.0,            # N·m, half of URDF effort limit
+                positionGain=0.8,
+                velocityGain=0.4,
                 physicsClientId=pc,
             )
 
         emergency = getattr(self.shared_state, 'emergency_sagittal_torque', {})
 
+        # Joints already driven by POSITION_CONTROL — skip in torque loop.
+        _position_controlled = set(hip_roll_joints) | set(yaw_hold_joints)
+
         for jname, raw_torque in torques.items():
             jid = self.joint_ids.get(jname)
             if jid is None:
                 continue
-            if jname in hip_roll_joints:
+            if jname in _position_controlled:
                 continue
 
             grf_val = grf_corr.get(jname, 0.0)
