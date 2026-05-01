@@ -208,3 +208,95 @@ class TestRegimeProfiles:
                     f"{regime.name}.{signal_name}: band={spec.acceptable_band} "
                     f"t05={spec.threshold_05} t00={spec.threshold_00}"
                 )
+
+
+from regime_monitor import RegimeMonitor, COL_COM_Z, COL_LEFT_CONTACT, COL_RIGHT_CONTACT
+from regime_monitor import COL_LEFT_FORCE, COL_RIGHT_FORCE
+from regime_monitor import COL_ANG_VEL_X, COL_ANG_VEL_Y, COL_ANG_VEL_Z
+from regime_monitor import COL_RAMP_GAIN, COL_SWING_PHASE
+
+
+class TestRegimeMonitor:
+
+    def _idle_row(self) -> np.ndarray:
+        """A healthy IDLE row with all signals at nominal."""
+        row = np.zeros(72, dtype=np.float64)
+        row[COL_CYCLE] = 200.0
+        row[COL_COM_Z] = 0.88
+        row[COL_LEFT_CONTACT] = 4.0   # CONTACT_CONFIRMED
+        row[COL_RIGHT_CONTACT] = 4.0
+        row[COL_LEFT_FORCE] = 39.7
+        row[COL_RIGHT_FORCE] = 39.7
+        row[COL_ANG_VEL_X] = 0.0
+        row[COL_ANG_VEL_Y] = 0.0
+        row[COL_ANG_VEL_Z] = 0.0
+        row[COL_STEP_PHASE] = 1.0     # DOUBLE_SUPPORT
+        row[COL_MISSION_STATE] = 1.0  # IDLE
+        row[COL_RAMP_GAIN] = 0.0
+        return row
+
+    def test_nominal_idle(self):
+        mon = RegimeMonitor()
+        row = self._idle_row()
+        regime, condition, conf = mon.classify(row)
+        assert regime == PrimaryRegime.IDLE_STANDING
+        assert condition == Condition.NOMINAL
+
+    def test_degraded_when_base_z_drifts(self):
+        mon = RegimeMonitor()
+        row = self._idle_row()
+        row[COL_COM_Z] = 0.83  # deviation 0.05 → at threshold_05 → conf = 0.5
+        regime, condition, conf = mon.classify(row)
+        assert regime == PrimaryRegime.IDLE_STANDING
+        assert condition == Condition.DEGRADED
+        assert conf['base_z'] <= 0.5
+
+    def test_critical_when_base_z_extreme(self):
+        mon = RegimeMonitor()
+        row = self._idle_row()
+        row[COL_COM_Z] = 0.50  # way below 0.0 threshold
+        regime, condition, conf = mon.classify(row)
+        assert regime == PrimaryRegime.IDLE_STANDING
+        assert condition == Condition.CRITICAL
+        assert conf['base_z'] == 0.0
+
+    def test_frozen_on_stale_cycle(self):
+        mon = RegimeMonitor()
+        row1 = self._idle_row()
+        row1[COL_CYCLE] = 100.0
+        mon.classify(row1)
+
+        row2 = self._idle_row()
+        row2[COL_CYCLE] = 100.0  # same cycle = stale
+        regime, condition, conf = mon.classify(row2)
+        assert regime == PrimaryRegime.FROZEN
+        assert condition == Condition.FALLEN
+
+    def test_walk_swing_regime(self):
+        mon = RegimeMonitor()
+        row = np.zeros(72, dtype=np.float64)
+        row[COL_CYCLE] = 300.0
+        row[COL_COM_Z] = 0.84
+        row[COL_MISSION_STATE] = 3.0  # WALK
+        row[COL_STEP_PHASE] = 4.0     # SWING
+        row[COL_LEFT_FORCE] = 79.5    # stance
+        row[COL_RIGHT_FORCE] = 0.0    # swing
+        row[COL_SWING_PHASE] = 0.5
+        regime, condition, conf = mon.classify(row)
+        assert regime == PrimaryRegime.WALK_SWING
+
+    def test_confidence_dict_has_all_profile_signals(self):
+        mon = RegimeMonitor()
+        row = self._idle_row()
+        regime, condition, conf = mon.classify(row)
+        profile = REGIME_PROFILES[PrimaryRegime.IDLE_STANDING]
+        for signal_name in profile:
+            assert signal_name in conf, f"Missing {signal_name} in confidence dict"
+
+    def test_all_confidences_are_floats_in_range(self):
+        mon = RegimeMonitor()
+        row = self._idle_row()
+        _, _, conf = mon.classify(row)
+        for name, val in conf.items():
+            assert isinstance(val, float), f"{name} is {type(val)}"
+            assert 0.0 <= val <= 1.0, f"{name} = {val}"

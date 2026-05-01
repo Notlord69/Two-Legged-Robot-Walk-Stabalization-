@@ -298,3 +298,116 @@ def classify_regime(row: np.ndarray) -> PrimaryRegime:
         return PrimaryRegime.DECEL_DS
 
     return PrimaryRegime.IDLE_STANDING
+
+
+# ============================================================================
+# SIGNAL EXTRACTION HELPERS
+# ============================================================================
+
+def _extract_signal(row: np.ndarray, signal_name: str,
+                    regime: PrimaryRegime) -> float:
+    """Extract a named signal value from the 72-column telemetry row.
+
+    For stance/swing force signals, determines which foot is stance
+    from the swing_side column (col 53: 0=left swing, 1=right swing).
+    """
+    if signal_name == 'base_z':
+        return float(row[COL_COM_Z])
+
+    if signal_name == 'angular_velocity':
+        ax = row[COL_ANG_VEL_X]
+        ay = row[COL_ANG_VEL_Y]
+        az = row[COL_ANG_VEL_Z]
+        return float(np.sqrt(ax*ax + ay*ay + az*az))
+
+    if signal_name == 'contact_force_left':
+        return float(row[COL_LEFT_FORCE])
+
+    if signal_name == 'contact_force_right':
+        return float(row[COL_RIGHT_FORCE])
+
+    if signal_name == 'contact_force_stance':
+        swing_side_val = row[53]  # 0 = left swing, 1 = right swing
+        if swing_side_val < 0.5:
+            return float(row[COL_RIGHT_FORCE])  # right is stance
+        return float(row[COL_LEFT_FORCE])       # left is stance
+
+    if signal_name == 'contact_force_swing':
+        swing_side_val = row[53]
+        if swing_side_val < 0.5:
+            return float(row[COL_LEFT_FORCE])   # left is swing
+        return float(row[COL_RIGHT_FORCE])      # right is swing
+
+    if signal_name == 'wbc_tracking_error':
+        errors = [abs(row[i]) for i in range(COL_ERR_L_HIP, COL_ERR_R_ANKLE + 1)]
+        return float(max(errors)) if errors else 0.0
+
+    if signal_name == 'ramp_gain':
+        return float(row[COL_RAMP_GAIN])
+
+    return 0.0
+
+
+# ============================================================================
+# REGIME MONITOR
+# ============================================================================
+
+ClassifyResult = Tuple[PrimaryRegime, Condition, Dict[str, float]]
+
+
+class RegimeMonitor:
+    """10 Hz observer: classifies each telemetry row into regime + condition.
+
+    Call classify(row) for each 72-column telemetry row.
+    Stateful: tracks previous cycle count for FROZEN detection.
+    """
+
+    def __init__(self):
+        self._prev_cycle: float = -1.0
+
+    def classify(self, row: np.ndarray) -> ClassifyResult:
+        """Classify one telemetry row.
+
+        Returns (PrimaryRegime, Condition, confidence_dict).
+        """
+        cycle = float(row[COL_CYCLE])
+
+        if cycle == self._prev_cycle and self._prev_cycle >= 0:
+            self._prev_cycle = cycle
+            return self._evaluate_frozen(row)
+
+        self._prev_cycle = cycle
+
+        regime = classify_regime(row)
+        return self._evaluate(row, regime)
+
+    def _evaluate_frozen(self, row: np.ndarray) -> ClassifyResult:
+        profile = REGIME_PROFILES[PrimaryRegime.FROZEN]
+        conf = {}
+        for signal_name, spec in profile.items():
+            measured = _extract_signal(row, signal_name, PrimaryRegime.FROZEN)
+            conf[signal_name] = spec.evaluate(measured)
+        return PrimaryRegime.FROZEN, Condition.FALLEN, conf
+
+    def _evaluate(self, row: np.ndarray,
+                  regime: PrimaryRegime) -> ClassifyResult:
+        profile = REGIME_PROFILES[regime]
+        conf: Dict[str, float] = {}
+
+        for signal_name, spec in profile.items():
+            measured = _extract_signal(row, signal_name, regime)
+            conf[signal_name] = spec.evaluate(measured)
+
+        if not conf:
+            return regime, Condition.NOMINAL, conf
+
+        min_conf = min(conf.values())
+
+        if min_conf == 0.0:
+            condition = Condition.CRITICAL
+        elif min_conf <= 0.5:
+            condition = Condition.DEGRADED
+        else:
+            condition = Condition.NOMINAL
+
+        return regime, condition, conf
