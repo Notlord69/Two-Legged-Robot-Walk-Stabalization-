@@ -82,6 +82,18 @@ COM_SHIFT_SAGITTAL_THRESHOLD: float = 0.05  # m, wider than lateral because sagi
 _LEFT_HIP_LINK:  str = "Left_Upper_Leg_1"
 _RIGHT_HIP_LINK: str = "Right_Upper_Leg_1"
 
+# Idle stance: 95% of maximum leg reach (R_MAX = L_THIGH + L_SHANK - buffer).
+# 80% is unreachable (falls below R_MIN) due to extreme L_THIGH/L_SHANK ratio.
+# 95% gives hip=-1.22 rad, knee=1.30 rad — within ±1.571 URDF limits.
+IDLE_STANCE_RATIO: float = 0.95  # dimensionless, fraction of kinematics.R_MAX
+_IDLE_STANCE_D: float = IDLE_STANCE_RATIO * kinematics.R_MAX  # m, target hip-to-foot distance
+
+# Fallback joint angles if IK fails (pre-computed from 95% R_MAX, foot below hip).
+# Left: URDF axis = -X → geometric angles negated.
+# Right: URDF axis = +X → geometric angles kept.
+_IDLE_FALLBACK_LEFT:  tuple = (0.0, 1.2191, -1.3021, 0.0)   # (roll, hip_pitch, knee, ankle)
+_IDLE_FALLBACK_RIGHT: tuple = (0.0, -1.2191, 1.3021, 0.0)   # (roll, hip_pitch, knee, ankle)
+
 
 # ============================================================================
 # HELPERS
@@ -141,8 +153,11 @@ class GaitPlannerController:
 
     def update(self) -> None:
         """Called once per 100 Hz cycle by HeartBeat.py."""
-        if (shared_state.freeze_robot or
-                shared_state.mission_state == MissionState.IDLE):
+        if shared_state.freeze_robot:
+            return
+
+        if shared_state.mission_state == MissionState.IDLE:
+            self._handle_idle_stance()
             return
 
         # Mid-cycle overrun guard: if the prior stages (sensors, stability) already
@@ -186,6 +201,25 @@ class GaitPlannerController:
         """Conditional timeout abort: preserve stance/swing sides, retry same step."""
         shared_state.swing_phase = 0.0
         self._transition_to(StepPhase.DOUBLE_SUPPORT)
+
+    def _handle_idle_stance(self) -> None:
+        """Compute standing IK for both legs — feet directly below hips.
+
+        Uses IK-derived angles at 95% of max leg reach. Falls back to
+        pre-computed angles if IK fails.
+        """
+        for side in ("left", "right"):
+            try:
+                foot_target = (0.0, 0.0, -_IDLE_STANCE_D)
+                ik_angles = kinematics.solve_ik(foot_target, side)
+                angles = (0.0, ik_angles[0], ik_angles[1], ik_angles[2])
+            except ValueError:
+                angles = _IDLE_FALLBACK_LEFT if side == "left" else _IDLE_FALLBACK_RIGHT
+
+            if side == "left":
+                shared_state.ik_left_angles = angles
+            else:
+                shared_state.ik_right_angles = angles
 
     # ── Stance IK anchor (used every cycle for stance leg) ───────────────────
 
