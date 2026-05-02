@@ -49,7 +49,82 @@ Flow:
 - **Contact threshold** (5.0 N) — symptom of no stance, not a threshold bug
 - **URDF** — no modifications
 
-## Verification
+## Implementation Status (2026-05-02)
+
+### Completed (committed)
+
+1. **Disable default PyBullet motors** — `HeartBeat.py:_build_joint_map()` now calls
+   `setJointMotorControl2(VELOCITY_CONTROL, force=0)` on every joint after URDF load.
+   Commit: `316c731`
+
+2. **Idle stance IK in gait planner** — `gait_planner.py` no longer returns early on
+   `MissionState.IDLE`. New `_handle_idle_stance()` computes standing IK at 95% R_MAX
+   with hardcoded fallback. Commits: `ebc02ff`, `8d3e03d`
+
+3. **Tests** — 3 new tests in `Test_Enviroment/test_idle_stance.py` (nonzero IK,
+   within limits, fallback). Existing `test_no_update_when_idle` renamed to
+   `test_no_gait_advance_when_idle`. All 377 tests pass. Commit: `831517b`
+
+### Blocker: Robot Explodes After Motor Disable
+
+Disabling default PyBullet velocity motors causes the robot to catapult to 40-72 m
+altitude within 2 seconds. All joint torques read 0 N·m in telemetry despite the WBC
+computing non-zero errors (1.3-3.7 rad, 5-8 joints saturated). Zero contact forces.
+
+**Attempted fix (reverted):** `_set_initial_pose()` using `p.resetJointState()` to
+spawn joints at stance angles. Did not help — robot still explodes, likely due to
+link interpenetration causing explosive PyBullet constraint resolution.
+
+**Root issue:** After `setJointMotorControl2(VELOCITY_CONTROL, force=0)`, subsequent
+`setJointMotorControl2(TORQUE_CONTROL, force=X)` calls in `apply_control()` appear to
+have no effect — `getJointState()[3]` (appliedJointMotorTorque) returns 0 on ALL
+joints for the entire run. This means no motor torque is ever applied, joints are
+completely free, and the robot is a ragdoll under gravity + constraint forces.
+
+### Geometry Discovery
+
+The "80% of full leg extension" target from the design is unreachable. The robot's
+extreme proportions (L_THIGH=60.7mm, L_SHANK=687mm) create a narrow workspace:
+- R_MIN = 0.6313 m (85% of R_MAX)
+- R_MAX = 0.7426 m
+- Usable range: 111 mm
+
+Joint limits (±1.571 rad) constrain standing to d ≥ 0.6906 m (93% R_MAX). The
+implementation uses 95% R_MAX (d=0.7055m), giving hip=-1.22 rad, knee=1.30 rad.
+
+## Future Debugging
+
+### Priority 1: Fix motor disable → torque application pipeline
+
+The default motor disable (`VELOCITY_CONTROL, force=0`) breaks torque control entirely.
+Investigate:
+
+1. **PyBullet motor mode transition** — Does switching from `VELOCITY_CONTROL` to
+   `TORQUE_CONTROL` via `setJointMotorControl2` work correctly? Write a minimal
+   PyBullet test (single joint, no URDF complexity) to verify.
+
+2. **Alternative disable patterns** — Try `p.setJointMotorControl2(...,
+   p.VELOCITY_CONTROL, targetVelocity=0, force=0)` with explicit `targetVelocity=0`.
+   Or try `p.setJointMotorControlArray` for batch disable.
+
+3. **Per-joint debug** — Add a debug print inside `apply_control()` to confirm
+   `setJointMotorControl2(TORQUE_CONTROL, force=X)` is actually called with X ≠ 0.
+   If X is non-zero but readback is 0, the issue is in PyBullet's motor model.
+
+4. **Consider reverting motor disable** — The original problem (left hip torque = 0)
+   may have a different root cause. Before the disable, the right hip and all
+   knee/ankle joints DID get torque. Investigate why Left_Hip_Forwards specifically
+   fails with default motors active.
+
+### Priority 2: Stance transition strategy
+
+Even when motor control works, driving joints from 0 to ±1.22 rad with KP=100 will
+saturate all joints at 100 N·m. Options:
+- Ramp IK targets gradually from current position over ~50 cycles
+- Use `p.resetJointState()` to pre-position joints (needs interpenetration testing)
+- Spawn robot at a higher z to allow settling, then lower
+
+## Verification (when blocker resolved)
 
 Run `python3 main.py --gui` and confirm:
 - COM stays above 0.7 m for 10 seconds
