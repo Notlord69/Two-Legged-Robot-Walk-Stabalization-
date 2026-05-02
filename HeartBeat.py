@@ -68,7 +68,7 @@ from telemetry import TelemetryThread
 # CONSTANTS
 # ============================================================================
 
-URDF_SPAWN_Z: float = 0.8806          # URDF-aligned spawn height
+URDF_SPAWN_Z: float = 0.02            # m — gentle drop; base_link frame is CAD floor origin
 TARGET_FREQ:   float = 100.0          # Hz
 TARGET_DT:     float = 1.0 / TARGET_FREQ   # 0.01 s
 OVERRUN_LIMIT: float = TARGET_DT      # 10 ms hard ceiling
@@ -339,6 +339,14 @@ class PyBulletInterface:
 
         # Freeze iteration order
         self._joint_list = list(self.joint_ids.items())
+
+        for jname, jid in self._joint_list:
+            p.setJointMotorControl2(
+                self.robot_id, jid,
+                controlMode=p.VELOCITY_CONTROL,
+                force=0.0,
+                physicsClientId=self.pc,
+            )
 
         # Joint map info is logged via TelemetryThread after init
 
