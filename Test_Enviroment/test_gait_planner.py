@@ -41,8 +41,8 @@ def _reset_for_planner(mission_state=MissionState.WALK):
     shared_state.set_contact_state('right', ContactState.CONTACT_CONFIRMED)
 
 
-def test_no_update_when_idle():
-    """IDLE state: swing_phase stays 0, step_count stays 0."""
+def test_no_gait_advance_when_idle():
+    """IDLE state: gait FSM doesn't advance (swing_phase, step_count stay 0)."""
     from gait_planner import update_gait_planner
     _reset_for_planner(mission_state=MissionState.IDLE)
     update_gait_planner()
