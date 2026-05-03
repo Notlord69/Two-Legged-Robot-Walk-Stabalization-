@@ -661,6 +661,9 @@ class Siclo1State:
             self.capture_point_error_sagittal = 0.0
             self.balance_mode_lateral = "INACTIVE"
             self.balance_mode_sagittal = "INACTIVE"
+            # Mission state machine fields
+            self.mission_state = MissionState.IDLE
+            self.ramp_gain = 0.0
 
 
 # ============================================================================

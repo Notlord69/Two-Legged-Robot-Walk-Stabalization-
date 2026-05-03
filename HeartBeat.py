@@ -795,34 +795,25 @@ class Siclo1Controller:
 
     # ------------------------------------------------------------------ #
     def _warmup(self, cycles: int) -> None:
-        """Run full control pipeline for N cycles without real-time timing.
+        """Settle robot at idle stance using POSITION_CONTROL before 100 Hz loop.
 
-        Lets the robot settle under gravity before the 100 Hz loop starts.
+        PyBullet POSITION_CONTROL handles first-contact impulses stably.
+        WBC (TORQUE_CONTROL) is NOT active during warmup — joints are owned by
+        PyBullet's internal PD until restore_torque_mode() is called.
         The 10 ms timing guard does NOT apply here.
         """
-        self.pybullet.set_stance_pose()
+        self.pybullet.enter_position_mode(gait_planner.get_idle_stance_angles())
         for _ in range(cycles):
             self.pybullet.read_sensors()
             self.pybullet.update_link_positions()
             perception.update_perception()
             stability.update_stability(dt=TARGET_DT)
             balance_controller.update_balance()
-            grf.update_grf()
-            gait_planner.update_gait_planner()
-            self._mission.update()
-            self._wbc_step()
-            recovery.update_recovery()
-            self.pybullet.apply_control()
             sim.interface.step_simulation(self.physics_client)
 
-        # Reset gait planner and balance controller after warmup
+        self.pybullet.restore_torque_mode()
         gait_planner.reset_gait_planner()
         balance_controller.reset_balance()
-
-        # Snap joints back to stance after warmup chaos. Warmup may leave joints at
-        # arbitrary positions and high velocities; resetting here ensures the first
-        # real cycle has near-zero WBC error and velocity, preventing KD saturation.
-        self.pybullet.set_stance_pose()
 
     # ------------------------------------------------------------------ #
     def step(self) -> bool:
