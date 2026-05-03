@@ -409,6 +409,22 @@ class PyBulletInterface:
                     physicsClientId=self.pc,
                 )
 
+    def restore_torque_mode(self) -> None:
+        """Re-disable all joint motors after POSITION_CONTROL warmup.
+
+        Restores VELOCITY_CONTROL force=0 on every joint — identical to
+        _build_joint_map(). Hands joints back to the WBC TORQUE_CONTROL path.
+        """
+        if self.robot_id is None:
+            return
+        for jname, jid in self._joint_list:
+            p.setJointMotorControl2(
+                self.robot_id, jid,
+                controlMode=p.VELOCITY_CONTROL,
+                force=0.0,
+                physicsClientId=self.pc,
+            )
+
     # ------------------------------------------------------------------ #
     # SENSOR READING  — fast path
     # ------------------------------------------------------------------ #
