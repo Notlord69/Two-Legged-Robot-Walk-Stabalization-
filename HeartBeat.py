@@ -393,6 +393,9 @@ class PyBulletInterface:
         maxVelocity=1.0 rad/s gives gentle settling without overshoot.
         force=50.0 N·m holds stance against gravity (hip gravity torque < 10 N·m).
         """
+        if self.robot_id is None:
+            return
+
         for jname, angle in target_angles.items():
             jid = self.joint_ids.get(jname)
             if jid is not None:
