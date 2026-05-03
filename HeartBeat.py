@@ -68,7 +68,7 @@ from telemetry import TelemetryThread
 # CONSTANTS
 # ============================================================================
 
-URDF_SPAWN_Z: float = 0.02            # m — gentle drop; base_link frame is CAD floor origin
+URDF_SPAWN_Z: float = -0.14           # m — feet at z≈0 (2.5mm penetration) when joints at stance (95% R_MAX)
 TARGET_FREQ:   float = 100.0          # Hz
 TARGET_DT:     float = 1.0 / TARGET_FREQ   # 0.01 s
 OVERRUN_LIMIT: float = TARGET_DT      # 10 ms hard ceiling
@@ -77,9 +77,10 @@ OVERRUN_LIMIT: float = TARGET_DT      # 10 ms hard ceiling
 LOG_BUFFER_SIZE: int = 2000
 
 # WBC joint-space PD gains — converts IK angle targets to additive torques.
-# These are tuning parameters, not URDF-derived.
-WBC_KP: float = 100.0   # N·m/rad, joint position proportional gain (halved to avoid saturation)
-WBC_KD: float = 28.0    # N·m·s/rad, joint velocity derivative gain (ζ ≈ 0.9 near-critical damping)
+# Interim conservative values. Pending replacement with Pinocchio-derived gains (calculateMassMatrix
+# equivalent from URDF rigid-body dynamics). ζ = KD / (2√(KP × I_eff)) ≈ 1.29 at I_eff=0.5 kg·m².
+WBC_KP: float = 30.0   # N·m/rad, conservative — avoids saturation at 1.0 rad spawn-to-stance error
+WBC_KD: float = 10.0   # N·m·s/rad, overdamped (ζ ≈ 1.29 at I_eff=0.5 kg·m²)
 
 # WBC joint mapping: (IK angle index, URDF joint name, sign)
 # sign: +1 for right (axis +X), -1 for left (axis -X)
@@ -351,6 +352,61 @@ class PyBulletInterface:
         # Joint map info is logged via TelemetryThread after init
 
     # ------------------------------------------------------------------ #
+    # STANCE INITIALISATION
+    # ------------------------------------------------------------------ #
+
+    def set_stance_pose(self) -> None:
+        """Snap robot to idle stance: base at spawn position, all joints at stance, zero velocity.
+
+        Called both before and after warmup. Warmup may leave the base launched to
+        several metres altitude with large joint velocities; resetting here ensures
+        the first real cycle has near-zero WBC error and no KD saturation.
+        """
+        p.resetBasePositionAndOrientation(
+            self.robot_id,
+            [0.0, 0.0, URDF_SPAWN_Z],
+            [0.0, 0.0, 0.0, 1.0],
+            physicsClientId=self.pc,
+        )
+        p.resetBaseVelocity(
+            self.robot_id,
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            physicsClientId=self.pc,
+        )
+        from gait_planner import get_idle_stance_angles
+        for jname, angle in get_idle_stance_angles().items():
+            jid = self.joint_ids.get(jname)
+            if jid is not None:
+                p.resetJointState(
+                    self.robot_id, jid,
+                    targetValue=angle,
+                    targetVelocity=0.0,
+                    physicsClientId=self.pc,
+                )
+
+    def enter_position_mode(self, target_angles: dict) -> None:
+        """Set all controlled joints to POSITION_CONTROL for warmup settling.
+
+        PyBullet's internal PD is unconditionally stable under contact impulses,
+        unlike TORQUE_CONTROL which saturates at velocities > effort_limit/KD.
+        maxVelocity=1.0 rad/s gives gentle settling without overshoot.
+        force=50.0 N·m holds stance against gravity (hip gravity torque < 10 N·m).
+        """
+        for jname, angle in target_angles.items():
+            jid = self.joint_ids.get(jname)
+            if jid is not None:
+                p.setJointMotorControl2(
+                    self.robot_id, jid,
+                    controlMode=p.POSITION_CONTROL,
+                    targetPosition=angle,
+                    targetVelocity=0.0,
+                    maxVelocity=1.0,   # rad/s — gentle settling
+                    force=50.0,        # N·m — supports stance against gravity
+                    physicsClientId=self.pc,
+                )
+
+    # ------------------------------------------------------------------ #
     # SENSOR READING  — fast path
     # ------------------------------------------------------------------ #
 
@@ -539,6 +595,10 @@ class PyBulletInterface:
             )
 
 
+# Alias so tests and external callers can reference the physics interface by
+# the canonical robot-facing name without coupling to the internal class name.
+PyBulletRobot = PyBulletInterface
+
 # ============================================================================
 # MAIN CONTROLLER — OPTIMISED
 # ============================================================================
@@ -719,9 +779,9 @@ class Siclo1Controller:
         """Run full control pipeline for N cycles without real-time timing.
 
         Lets the robot settle under gravity before the 100 Hz loop starts.
-        Gait commands are not issued (no gait planner integrated yet).
         The 10 ms timing guard does NOT apply here.
         """
+        self.pybullet.set_stance_pose()
         for _ in range(cycles):
             self.pybullet.read_sensors()
             self.pybullet.update_link_positions()
@@ -739,6 +799,11 @@ class Siclo1Controller:
         # Reset gait planner and balance controller after warmup
         gait_planner.reset_gait_planner()
         balance_controller.reset_balance()
+
+        # Snap joints back to stance after warmup chaos. Warmup may leave joints at
+        # arbitrary positions and high velocities; resetting here ensures the first
+        # real cycle has near-zero WBC error and velocity, preventing KD saturation.
+        self.pybullet.set_stance_pose()
 
     # ------------------------------------------------------------------ #
     def step(self) -> bool:
@@ -911,8 +976,9 @@ class Siclo1Controller:
         row[43] = 1.0 if ts.get('Right_Knee', False) else 0.0
         row[44] = 1.0 if ts.get('Right_Ankle', False) else 0.0
 
-        # Applied torques (45-50)
-        jt = shared_state.joint_torques
+        # Commanded torques (45-50) — from WBC, not PyBullet motor readback.
+        # getJointState()[3] returns 0 for TORQUE_CONTROL joints (PyBullet API limitation).
+        jt = getattr(shared_state, 'target_torques', {})
         row[45] = jt.get('Left_Hip_Forwards', 0.0)
         row[46] = jt.get('Left_Knee', 0.0)
         row[47] = jt.get('Left_Ankle', 0.0)
