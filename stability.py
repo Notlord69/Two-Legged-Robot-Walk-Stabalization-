@@ -7,22 +7,20 @@ Monitors Center of Mass (COM) relative to support polygon.
 Integrates Week 1 load offset (5 kg variable payload).
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  URDF SYNC  —  Siclo1.urdf                                                  │
+│  URDF SYNC  —  Siclo1_Primitive.urdf  (ITER-003/004, May 2026)              │
 │                                                                              │
-│  Changes from pre-sync version                                               │
-│  ─────────────────────────────                                               │
-│  1. joint_angles keys now use URDF names via URDF_JOINT_NAMES:              │
-│       'Left_Hip_Forwards'  instead of 'l_hip'                               │
-│       'Left_Knee'          instead of 'l_knee'                              │
-│       'Right_Hip_Fowards'  instead of 'r_hip'   (note URDF typo preserved) │
-│       'Right_Knee'         instead of 'r_knee'                              │
+│  Joint name conventions (URDF-exact, typo preserved):                       │
+│       'Left_Hip_Forwards'   axis = −X  (angles negated in FK/Jacobian)      │
+│       'Left_Knee'           axis = −X                                        │
+│       'Right_Hip_Fowards'   axis = +X  (URDF typo — no 'r' in 'Forwards')   │
+│       'Right_Knee'          axis = +X                                        │
 │                                                                              │
-│  2. Axis-sign correction in forward_kinematics_2d():                        │
-│       Left  hip/knee axis = −X  →  sin(−θ) applied (negate angle)          │
-│       Right hip/knee axis = +X  →  sin(+θ) unchanged                       │
+│  Axis-sign convention in forward_kinematics_2d():                           │
+│       Left  hip/knee  →  sin(−θ)  (negate URDF angle)                      │
+│       Right hip/knee  →  sin(+θ)  unchanged                                 │
 │                                                                              │
-│  3. DEFAULT_LINK_DATA now sourced from shared_state.DEFAULT_LINK_DATA       │
-│     (masses and lengths extracted from URDF <inertial> and joint origins).  │
+│  DEFAULT_LINK_DATA sourced from shared_state.DEFAULT_LINK_DATA               │
+│  (masses and lengths from Siclo1_Primitive.urdf <inertial> + joint origins).│
 └─────────────────────────────────────────────────────────────────────────────┘
 
 INPUTS (from shared_state):

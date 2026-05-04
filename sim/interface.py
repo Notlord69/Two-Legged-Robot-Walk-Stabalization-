@@ -11,11 +11,11 @@ import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-_URDF_PATH = Path(__file__).parent.parent / "Siclo1.urdf"
+_URDF_PATH = Path(__file__).parent.parent / "Siclo1_Primitive.urdf"
 
 
 def get_joint_limits() -> dict[str, dict[str, float]]:
-    """Parse Siclo1.urdf, return joint limits by exact URDF joint name.
+    """Parse Siclo1_Primitive.urdf, return joint limits by exact URDF joint name.
 
     Returns: {joint_name: {'lower': float, 'upper': float}}  angles in rad.
     Includes only joints with a <limit> element (revolute joints).
@@ -36,7 +36,7 @@ def get_joint_limits() -> dict[str, dict[str, float]]:
 
 
 def get_segment_lengths() -> dict[str, dict[str, float]]:
-    """Parse Siclo1.urdf joint origins, return IK segment lengths (m).
+    """Parse Siclo1_Primitive.urdf joint origins, return IK segment lengths (m).
 
     Segment length = Euclidean norm of joint <origin xyz=...>.
     Left leg is the canonical reference (verified and patched 2026-04-04).

@@ -1,361 +1,304 @@
-# Project Siclo1 - Visual Architecture Guide
-
-## System Architecture Diagram
+# Siclo1 — Architecture Diagram
 
 ```
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                    PROJECT SICLO1 - MODULAR ARCHITECTURE                  ║
-║                         200Hz Bipedal Robot Controller                    ║
-╚═══════════════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              PROJECT SICLO1 — 100 Hz BIPEDAL ROBOT CONTROLLER               ║
+║                   8 kg | PyBullet | Siclo1_Primitive.urdf                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 
 
-┌───────────────────────────────────────────────────────────────────────────┐
-│                          SHARED_STATE.PY                                  │
-│                       (Single Source of Truth)                            │
-│                                                                           │
-│  ┌─────────────┬──────────────┬───────────────┬──────────────┐           │
-│  │   TIMING    │   PHYSICS    │    CONTACT    │  STABILITY   │           │
-│  │             │              │               │              │           │
-│  │ • sim_time  │ • positions  │ • L_state     │ • status     │           │
-│  │ • cycle#    │ • velocities │ • R_state     │ • COM        │           │
-│  │ • dt        │ • forces     │ • slip_flags  │ • margin     │           │
-│  │ • violations│ • load_mass  │               │              │           │
-│  └─────────────┴──────────────┴───────────────┴──────────────┘           │
-│                                                                           │
-│  Thread-safe setters • Convenience methods • Diagnostics                 │
-└───────────────────────────────────────────────────────────────────────────┘
-         ▲                ▲                ▲                ▲
-         │                │                │                │
-         │ read/write     │ read/write     │ read/write     │ read/write
-         │                │                │                │
-    ┌────┴──────┐    ┌───┴────────┐   ┌───┴────────┐   ┌──┴────────┐
-    │           │    │            │   │            │   │           │
-    │  MAIN.PY  │    │PERCEPTION  │   │ STABILITY  │   │ RECOVERY  │
-    │           │    │   .PY      │   │    .PY     │   │   .PY     │
-    │           │    │            │   │            │   │           │
-    │ ┌───────┐ │    │ ┌────────┐ │   │ ┌────────┐ │   │ ┌───────┐ │
-    │ │200Hz  │ │    │ │Contact │ │   │ │  COM   │ │   │ │Monitor│ │
-    │ │Heart  │ │    │ │  FSM   │ │   │ │Tracker │ │   │ │ &     │ │
-    │ │beat   │ │    │ │ (L+R)  │ │   │ │+ Load  │ │   │ │Trigger│ │
-    │ └───────┘ │    │ └────────┘ │   │ └────────┘ │   │ └───────┘ │
-    │           │    │            │   │            │   │           │
-    │ ┌───────┐ │    │ ┌────────┐ │   │ ┌────────┐ │   │ ┌───────┐ │
-    │ │PyBullet│ │    │ │  Slip  │ │   │ │Support │ │   │ │Failure│ │
-    │ │Sensor │ │    │ │Detect  │ │   │ │Polygon │ │   │ │Detect │ │
-    │ │Read   │ │    │ │        │ │   │ └────────┘ │   │ └───────┘ │
-    │ └───────┘ │    │ └────────┘ │   │            │   │           │
-    └───────────┘    └────────────┘   └────────────┘   └───────────┘
-         │
-         │  Control Loop Order (5ms cycle):
-         │
-         ├─► 1. Read Sensors (→ shared_state)
-         ├─► 2. perception.update()      ┐
-         ├─► 3. stability.update()       │ Modules in sequence
-         ├─► 4. recovery.update()        ┘
-         ├─► 5. Apply Control
-         ├─► 6. Step Simulation
-         └─► 7. Check Timing
+════════════════════════════════════════════════════════════════════════════════
+  ENTRY POINT
+════════════════════════════════════════════════════════════════════════════════
+
+  main.py  ──────────────────────────────────────────────────────────────────
+  CLI entry: argparse --gui --viz-hz --duration --hold --walk --on
+  Constructs Siclo1Controller (HeartBeat.py), calls .run(max_cycles=N)
 
 
-════════════════════════════════════════════════════════════════════════════
+════════════════════════════════════════════════════════════════════════════════
+  12-STAGE CONTROL PIPELINE  (HeartBeat.py, one iteration = 10 ms)
+════════════════════════════════════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  STAGE 1  sensors          sim/interface.py                             │
+  │                            getJointState, getLinkState, getContactPoints│
+  │                            → shared_state.{joint_positions, base_pose,  │
+  │                               foot_position/velocity/force/flat/ticks}  │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 2  link_positions   HeartBeat.py                                 │
+  │                            getLinkState for every link                  │
+  │                            → shared_state.link_positions                │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 3  perception       perception.py                                │
+  │                            4-state contact FSM (per foot)               │
+  │                            slip detection (force drop + lateral vel)    │
+  │                            → shared_state.{*_contact_state, *_slip}     │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 4  stability        stability.py                                 │
+  │                            2D FK fallback, Shapely support polygon      │
+  │                            LIPM capture point                           │
+  │                            → shared_state.{stability_status,            │
+  │                               stability_margin, com_position,           │
+  │                               capture_point}                            │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 5  balance          balance_controller.py                        │
+  │                            Lateral roll PID   (LATERAL_ROLL_GAIN=0.8)  │
+  │                            Sagittal pitch PID (SAGITTAL_PITCH_GAIN=1.2) │
+  │                            Emergency torque injection  (threshold 8 cm) │
+  │                            → shared_state.balance_torque_correction     │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 6  grf              grf.py                                       │
+  │                            Spring-damper Fz (K=1589 N/m, B=94 N·s/m)  │
+  │                            Sagittal 2-link Jacobian torques             │
+  │                            Suppressed in IDLE; suppressed on swing leg  │
+  │                            → shared_state.grf_torque_correction         │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 7  gait_planner     gait_planner.py                              │
+  │                            5-phase step FSM per leg                     │
+  │                            Idle-stance ramp (50 cycles)                 │
+  │                            → shared_state.{wbc_targets, step_phase,     │
+  │                               stance_side, target_foot_position}        │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 8  mission          mission.py                                   │
+  │                            5-state mission FSM                          │
+  │                            ramp_gain [0→1] over 50 cycles (RAMP)        │
+  │                            ramp_gain [1→0] over 20 cycles (DECEL)       │
+  │                            → shared_state.{mission_state, ramp_gain}    │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 9  wbc              HeartBeat.py                                 │
+  │                            Joint-space PD: KP=30 N·m/rad KD=10 N·m·s/r │
+  │                            τ = KP*(q_target−q) − KD*q_dot               │
+  │                            → shared_state.wbc_torques                   │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 10 recovery         recovery.py                                  │
+  │                            5-priority watchdog (see FSM below)          │
+  │                            → shared_state.{recovery_action,             │
+  │                               freeze_robot, emergency_stop_triggered}   │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 11 apply_control    HeartBeat.py                                 │
+  │                            Σ(wbc + balance + grf) torques               │
+  │                            → sim/interface.set_joint_position_target()  │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  STAGE 12 step_sim         HeartBeat.py                                 │
+  │                            sim/interface.step_simulation()              │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Timing budget: 10.0 ms/cycle.  Violation → timing_violations++
+  Critical violations → freeze_robot = True (Safe Freeze)
 
 
-DATA FLOW DIAGRAM:
+════════════════════════════════════════════════════════════════════════════════
+  SHARED STATE BUS  (shared_state.py)
+════════════════════════════════════════════════════════════════════════════════
 
-Time: t=0ms
-┌──────────────┐
-│  PyBullet    │  Read physical state
-│  Simulation  │  • Foot positions, velocities, forces
-└──────┬───────┘  • Base position, orientation
-       │
-       ▼ Write
-┌────────────────────────────────────────────┐
-│         shared_state                       │
-│  left_foot_position = [x, y, z]            │
-│  left_foot_velocity = [vx, vy, vz]         │
-│  left_foot_force = F                       │
-│  (same for right foot)                     │
-└────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                       shared_state  (Siclo1State singleton)              │
+  │                                                                          │
+  │  ┌────────────┬──────────────┬──────────────┬────────────┬────────────┐ │
+  │  │  TIMING    │  PHYSICS     │  CONTACT     │  CONTROL   │  SAFETY    │ │
+  │  │            │              │              │            │            │ │
+  │  │ sim_time   │ com_position │ *_contact_   │ wbc_       │ freeze_    │ │
+  │  │ cycle_cnt  │ base_pose    │   state      │  targets   │  robot     │ │
+  │  │ timing_    │ joint_pos/   │ *_foot_      │ grf_torque │ emergency_ │ │
+  │  │  violations│  vel         │   pos/vel/   │ balance_   │  stop      │ │
+  │  │            │ link_pos     │   force/flat │  torque    │ recovery_  │ │
+  │  │            │              │ *_ticks      │ ramp_gain  │  action    │ │
+  │  └────────────┴──────────────┴──────────────┴────────────┴────────────┘ │
+  │                                                                          │
+  │  + TelemetryRingBuffer (72 cols, numpy, zero-allocation)                 │
+  │  + URDF_JOINT_NAMES, URDF_JOINT_LIMITS, DEFAULT_LINK_DATA               │
+  └──────────────────────────────────────────────────────────────────────────┘
 
-
-Time: t=1ms
-       │ Read
-       ▼
-┌──────────────┐
-│ PERCEPTION   │  Process sensor data
-│  MODULE      │  • Run contact FSM
-└──────┬───────┘  • Detect slip
-       │
-       ▼ Write
-┌────────────────────────────────────────────┐
-│         shared_state                       │
-│  left_foot_contact_state = CONFIRMED       │
-│  right_foot_contact_state = TENTATIVE      │
-│  left_foot_slip_detected = False           │
-│  right_foot_slip_detected = False          │
-└────────────────────────────────────────────┘
+         ▲  ▲  ▲  ▲  ▲  ▲  ▲  ▲  ▲  ▲  ▲  ▲  ▲  ▲
+         │  all modules read/write only shared_state  │
+         │  no direct module-to-module calls          │
 
 
-Time: t=2ms
-       │ Read (contact points)
-       ▼
-┌──────────────┐
-│  STABILITY   │  Compute physics
-│   MODULE     │  • Calculate COM (with load)
-└──────┬───────┘  • Check polygon containment
-       │
-       ▼ Write
-┌────────────────────────────────────────────┐
-│         shared_state                       │
-│  com_position = [x, y, z]                  │
-│  stability_status = STABLE                 │
-│  stability_margin = 0.025m                 │
-│  current_safety_margin = 0.018m (with load)│
-└────────────────────────────────────────────┘
+════════════════════════════════════════════════════════════════════════════════
+  MODULE DEPENDENCY GRAPH
+════════════════════════════════════════════════════════════════════════════════
+
+                    ┌────────────────────────┐
+                    │     shared_state.py    │  ← no external dependencies
+                    └──┬──┬──┬──┬──┬──┬──┬──┘
+                       │  │  │  │  │  │  │
+          ┌────────────┘  │  │  │  │  │  └──────────────┐
+          │     ┌─────────┘  │  │  │  └────────┐        │
+          │     │     ┌──────┘  │  └────┐      │        │
+          ▼     ▼     ▼         ▼       ▼       ▼        ▼
+      percep  stab  balance   grf   gait_  mission  recovery
+      tion    ility  ctrl          planner
+          │     │     │         │       │       │        │
+          └─────┴─────┴─────────┴───────┴───────┴────────┘
+                                 │
+                                 ▼
+                            HeartBeat.py          ← imports all of the above
+                                 │
+                            sim/interface.py       ← all p.* calls
+                                 │
+                            PyBullet physics
+
+          sim/viz_bridge.py  ──► viz/gui_worker.py (subprocess)
+          telemetry.py       ──► TelemetryThread (daemon thread)
+          recorder.py        ──► VideoRecorder (daemon thread)
+          kinematics.py      ──  pure math, no shared_state writes
+
+  ✓ No circular dependencies
+  ✓ Each control module imports only shared_state
+  ✓ HeartBeat.py orchestrates; nothing imports HeartBeat
 
 
-Time: t=3ms
-       │ Read (stability + contacts)
-       ▼
-┌──────────────┐
-│  RECOVERY    │  Monitor state
-│   MODULE     │  • Check for failures
-└──────┬───────┘  • Decide action
-       │
-       ▼ Write
-┌────────────────────────────────────────────┐
-│         shared_state                       │
-│  recovery_action = NONE                    │
-│  recovery_active = False                   │
-│  recovery_reason = ""                      │
-└────────────────────────────────────────────┘
+════════════════════════════════════════════════════════════════════════════════
+  STATE MACHINE DIAGRAMS
+════════════════════════════════════════════════════════════════════════════════
+
+  CONTACT FSM  (perception.py, one instance per foot)
+
+      ┌───────────────┐
+      │  NO_CONTACT   │◄────────────────────────────────────────┐
+      └───────┬───────┘                                         │
+              │ z < height_threshold                            │ airborne
+              ▼                                                  │
+      ┌───────────────┐                                         │
+      │TOUCH_EXPECTED │──── force > min_thresh ──────────────►  │
+      └───────┬───────┘                                         │
+              │ force > min_thresh                              │
+              ▼                                                  │
+      ┌───────────────┐                                         │
+      │   CONTACT     │──── force drop ──────────────────────── ┘
+      │   TENTATIVE   │
+      └───────┬───────┘
+              │ ticks >= 3 AND foot_flat == True
+              ▼
+      ┌───────────────┐
+      │   CONTACT     │──── force < release_thresh ──────────── ┐
+      │   CONFIRMED   │                                         │
+      └───────────────┘                                         │
+                                      ┌──────────────────────── ┘
+                                      ▼
+                               (back to TOUCH_EXPECTED
+                                or NO_CONTACT based on z)
+
+  ────────────────────────────────────────────────────────────────
+
+  GAIT FSM  (gait_planner.py, per-step cycle)
+
+      IDLE_STANCE (ramp over 50 cycles)
+              │ walk command received
+              ▼
+      DOUBLE_SUPPORT ──► COM_SHIFT ──► LIFT ──► SWING ──► PLACE
+              ▲                                                │
+              └────────────────────────────────────────────────┘
+                          (alternating swing side)
+
+  ────────────────────────────────────────────────────────────────
+
+  MISSION FSM  (mission.py)
+
+      IDLE ──(walk D requested)──► RAMP ──(ramp_gain==1)──► WALK
+                                                                │
+             STOP ◄──(decel done)── DECEL ◄──(dist reached)────┘
+
+      ramp_gain: 0→1 over 50 cycles on RAMP entry
+                 1→0 over 20 cycles on DECEL entry
+
+  ────────────────────────────────────────────────────────────────
+
+  RECOVERY DECISION TREE  (recovery.py, evaluated every cycle)
+
+      is_unstable AND step_timeout exceeded?
+          │ YES ──► EMERGENCY_STOP
+          │ NO
+          ▼
+      Previously-CONFIRMED contact now lost?
+          │ YES ──► ABORT_HOLD
+          │ NO
+          ▼
+      Both feet unconfirmed AND NOT IDLE AND timed out?
+          │ YES ──► REPOSITION (or EMERGENCY_STOP if max_attempts)
+          │ NO
+          ▼
+      Any foot slipping?
+          │ YES ──► REPOSITION
+          │ NO
+          ▼
+      MARGINAL stability AND marginal_timeout exceeded?
+          │ YES ──► ABORT_HOLD
+          │ NO
+          ▼
+          NONE  (no recovery needed)
+
+  Note: step timer resets every cycle while mission_state == IDLE,
+  so priorities 1, 3, and 5 never fire while the robot stands still.
 
 
-Time: t=4ms
-       │ Read (recovery action)
-       ▼
-┌──────────────┐
-│ MAIN CONTROL │  Execute control
-│              │  • Apply joint torques
-└──────┬───────┘  • Step simulation
-       │
-       ▼
-   (cycle repeats)
+════════════════════════════════════════════════════════════════════════════════
+  SIDE SYSTEMS
+════════════════════════════════════════════════════════════════════════════════
 
+  TELEMETRY PIPELINE
 
-════════════════════════════════════════════════════════════════════════════
+      HeartBeat.py writes 72-column row into TelemetryRingBuffer each cycle
+                  │
+                  ▼  (zero allocation — numpy ring buffer)
+      TelemetryThread (10 Hz drain) ──► sessions/<ts>/telemetry.csv
+                                    ──► sessions/<ts>/regime.csv
+                                    ──► sessions/<ts>/summary.txt
+                  │
+                  ▼
+      analyze.py (post-run) ──► com_trajectory.png
+                             ──► contact_forces.png
+                             ──► timing.png
+                             ──► stability.png
 
+  REGIME MONITOR
 
-DEPENDENCY GRAPH:
-
-                    ┌──────────────┐
-                    │shared_state.py│  (No dependencies)
-                    └───────┬──────┘
-                            │
-              ┌─────────────┼─────────────┬──────────────┐
-              │             │             │              │
-              ▼             ▼             ▼              ▼
-       ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
-       │perception│  │stability │  │ recovery │  │  main.py │
-       │   .py    │  │   .py    │  │   .py    │  │          │
-       └──────────┘  └──────────┘  └──────────┘  └────┬─────┘
-                                                        │
-                                                        │ imports all
-                                                        ▼
-                                             ┌─────────────────────┐
-                                             │ Orchestrates        │
-                                             │ all modules         │
-                                             └─────────────────────┘
-
-✓ NO CIRCULAR DEPENDENCIES
-✓ Each module only depends on shared_state
-✓ main.py coordinates everything
-
-
-════════════════════════════════════════════════════════════════════════════
-
-
-STATE MACHINE DIAGRAMS:
-
-CONTACT FSM (in perception.py):
-
-    ┌─────────────┐
-    │ NO_CONTACT  │◄──────────────────┐
-    └──────┬──────┘                   │
-           │                          │
-           │ height < threshold       │
-           ▼                          │
-    ┌──────────────┐                 │
-    │    TOUCH     │                 │
-    │  EXPECTED    │                 │ release + airborne
-    └──────┬───────┘                 │
-           │                         │
-           │ force detected          │
-           ▼                         │
-    ┌──────────────┐                │
-    │  CONTACT     │                │
-    │  TENTATIVE   │────────────────┤ force drop
-    └──────┬───────┘                │
-           │                        │
-           │ settled + 25ms         │
-           ▼                        │
-    ┌──────────────┐                │
-    │  CONTACT     │────────────────┘
-    │  CONFIRMED   │
-    └──────────────┘
-
-
-RECOVERY DECISION TREE (in recovery.py):
-
-    Is unstable AND timeout > 3s?
-           │
-           ├─YES──► EMERGENCY_STOP
-           │
-           └─NO
-              │
-              Contact lost unexpectedly?
-                     │
-                     ├─YES──► ABORT_HOLD
-                     │
-                     └─NO
-                        │
-                        Timeout without contact?
-                               │
-                               ├─YES──► REPOSITION
-                               │
-                               └─NO
-                                  │
-                                  Slip detected?
-                                         │
-                                         ├─YES──► REPOSITION
-                                         │
-                                         └─NO──► NONE (all good)
-
-
-════════════════════════════════════════════════════════════════════════════
-
-
-TIMING BUDGET (200Hz = 5ms per cycle):
-
-┌─────────────────────────────────────────────────────┐
-│ 0.0ms ├─┤ Start Heartbeat                           │
-│ 0.5ms ├────────┤ Read Sensors (PyBullet)            │
-│ 1.0ms ├──────────────┤ Perception.update()          │
-│ 1.5ms ├──────────────────────┤ Stability.update()   │
-│ 2.0ms ├────────────────────────────┤ Recovery.update()│
-│ 2.5ms ├──────────────────────────────────┤ Control   │
-│ 3.5ms ├────────────────────────────────────────┤ Sim │
-│ 4.5ms ├──────────────────────────────────────────────┤│
-│ 5.0ms │ End Cycle (sleep if ahead, warn if behind)  │
-└─────────────────────────────────────────────────────┘
-
-Headroom: ~0.5ms for overhead
-
-
-════════════════════════════════════════════════════════════════════════════
-
-
-KEY FEATURES BY MODULE:
-
-┌──────────────────────────────────────────────────────────────────┐
-│ PERCEPTION (perception.py)                                       │
-├──────────────────────────────────────────────────────────────────┤
-│ ✓ 4-state FSM per foot                                           │
-│ ✓ Temporal filtering (25ms settling)                             │
-│ ✓ Hysteresis (5N engage, 3N release)                             │
-│ ✓ Slip detection (force drop + lateral motion)                   │
-│ ✓ Emergency detection (unsafe velocity/penetration)              │
-└──────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────┐
-│ STABILITY (stability.py)                                         │
-├──────────────────────────────────────────────────────────────────┤
-│ ✓ COM calculation from links                                     │
-│ ✓ Week 1: Dynamic load offset (0-5kg)                            │
-│ ✓ Week 1: Safety margin scaling (load-dependent)                 │
-│ ✓ Support polygon from confirmed contacts                        │
-│ ✓ Point-in-polygon stability check                               │
-│ ✓ STABLE/MARGINAL/UNSTABLE classification                        │
-└──────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────┐
-│ RECOVERY (recovery.py)                                           │
-├──────────────────────────────────────────────────────────────────┤
-│ ✓ Monitors stability.py outputs                                  │
-│ ✓ Monitors perception.py outputs                                 │
-│ ✓ Timeout detection                                              │
-│ ✓ Contact loss detection                                         │
-│ ✓ Slip response                                                  │
-│ ✓ Priority-based action selection                                │
-│ ✓ Event logging                                                  │
-└──────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────┐
-│ MAIN (main.py)                                                   │
-├──────────────────────────────────────────────────────────────────┤
-│ ✓ 200Hz deterministic heartbeat                                  │
-│ ✓ Microsecond-precision timing                                   │
-│ ✓ Timing violation detection                                     │
-│ ✓ PyBullet sensor reading                                        │
-│ ✓ Module orchestration                                           │
-│ ✓ System freeze on critical violations                           │
-└──────────────────────────────────────────────────────────────────┘
-
-
-════════════════════════════════════════════════════════════════════════════
-
-
-EXAMPLE: Complete Cycle with Data
-
-t=0.000s  START CYCLE
+      RegimeMonitor.classify(shared_state)
           │
-          ├─ shared_state.cycle_count = 0
-          ├─ shared_state.sim_time = 0.000
-          │
-t=0.001s  READ SENSORS
-          │
-          ├─ shared_state.left_foot_position = [-0.1, 0.0, 0.0]
-          ├─ shared_state.left_foot_force = 45.3 N
-          ├─ shared_state.right_foot_position = [0.1, 0.0, 0.0]
-          ├─ shared_state.right_foot_force = 48.7 N
-          │
-t=0.002s  PERCEPTION.UPDATE()
-          │
-          ├─ Read: left_foot_force = 45.3 N
-          ├─ Process: FSM detects stable force
-          ├─ Write: left_foot_contact_state = CONFIRMED
-          │
-          ├─ Read: right_foot_force = 48.7 N
-          ├─ Process: FSM detects stable force
-          └─ Write: right_foot_contact_state = CONFIRMED
-          │
-t=0.003s  STABILITY.UPDATE()
-          │
-          ├─ Read: confirmed_contact_points = [left_pos, right_pos]
-          ├─ Read: current_load_mass = 2.5 kg
-          ├─ Compute: COM with 2.5kg load = [0.0, 0.0, 1.02]
-          ├─ Compute: Support polygon from 2 points
-          ├─ Check: COM inside polygon ✓
-          ├─ Write: stability_status = STABLE
-          ├─ Write: stability_margin = 0.023m
-          └─ Write: current_safety_margin = 0.019m (scaled)
-          │
-t=0.004s  RECOVERY.UPDATE()
-          │
-          ├─ Read: stability_status = STABLE
-          ├─ Read: left_foot_contact_state = CONFIRMED
-          ├─ Read: right_foot_contact_state = CONFIRMED
-          ├─ Read: step_duration = 0.5s
-          ├─ Evaluate: All conditions good
-          ├─ Write: recovery_action = NONE
-          └─ Write: recovery_active = False
-          │
-t=0.005s  END CYCLE
-          │
-          ├─ Computation time: 4.2ms
-          ├─ Sleep: 0.8ms
-          └─ Next cycle: t=0.005s
+          ├── scores 11 PrimaryRegimes (STARTUP … FALLEN)
+          ├── per-signal confidence weighting
+          └── returns (PrimaryRegime, Condition)
 
+      Condition: NOMINAL / DEGRADED / CRITICAL / FALLEN
+
+  VIZ BRIDGE
+
+      HeartBeat.py
+          │  push_pose(base_pos, base_orn, joint_positions)
+          ▼
+      SharedMemory float64 buffer  [seq | pos(3) | orn(4) | joints(N)]
+          │  (lock-free write barrier: seq incremented last)
+          ▼
+      viz/gui_worker.py subprocess  ──► p.GUI PyBullet window @ viz_fps Hz
+
+  VIDEO RECORDER
+
+      recorder.VideoRecorder (daemon thread)
+          │  sim/interface.capture_frame() at 15 Hz
+          │  TinyRenderer — no GPU, works in DIRECT mode
+          ▼
+      sessions/<ts>/walk.mp4  (OpenCV mp4v)
+
+
+════════════════════════════════════════════════════════════════════════════════
+  TIMING BUDGET  (100 Hz = 10.0 ms per cycle)
+════════════════════════════════════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  0.0 ms ─────────────────────────────────── START CYCLE                │
+  │  0.5 ms ───────────┤ Sensor reads (stages 1–2)                         │
+  │  0.7 ms ───────────────┤ Perception (stage 3)                          │
+  │  1.1 ms ──────────────────────┤ Stability (stage 4)                    │
+  │  1.4 ms ─────────────────────────────┤ Balance + GRF (stages 5–6)      │
+  │  1.6 ms ───────────────────────────────────┤ Gait + Mission (7–8)      │
+  │  1.9 ms ──────────────────────────────────────────┤ WBC (stage 9)      │
+  │  2.2 ms ─────────────────────────────────────────────┤ Recovery (10)   │
+  │  2.5 ms ────────────────────────────────────────────────┤ Apply (11)   │
+  │  7.5 ms ─────────────────────────────────────────────────────┤ p.step  │
+  │ 10.0 ms ──────────────────────────────────────────────────────── END   │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  p.stepSimulation() dominates (~5 ms). Overhead and telemetry ~1 ms.
+  Violations logged in shared_state.timing_violations and telemetry.csv.
 ```
-
-**This diagram shows how data flows through the system in real-time!**

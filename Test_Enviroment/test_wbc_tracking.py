@@ -28,16 +28,34 @@ def test_saturation_flag_initially_empty():
     assert shared_state.wbc_torque_saturated == {}
 
 
-def test_wbc_kp_reduced():
-    """WBC_KP should be 100.0 N·m/rad (reduced from 200)."""
+def test_wbc_kp_conservative():
+    """WBC_KP should be 30.0 N·m/rad (conservative interim — pending Pinocchio-derived gains)."""
     from HeartBeat import WBC_KP
-    assert WBC_KP == 100.0, f"WBC_KP={WBC_KP}, expected 100.0"
+    assert WBC_KP == 30.0, f"WBC_KP={WBC_KP}, expected 30.0"
 
 
-def test_wbc_kd_increased():
-    """WBC_KD should be 28.0 N·m·s/rad (increased from 15)."""
+def test_wbc_kd_conservative():
+    """WBC_KD should be 10.0 N·m·s/rad (ζ ≈ 1.29 at I_eff=0.5 kg·m², overdamped)."""
     from HeartBeat import WBC_KD
-    assert WBC_KD == 28.0, f"WBC_KD={WBC_KD}, expected 28.0"
+    assert WBC_KD == 10.0, f"WBC_KD={WBC_KD}, expected 10.0"
+
+
+def test_wbc_no_saturation_at_one_rad_error():
+    """A 1.0 rad stance error must not saturate the WBC (τ = KP × err < 100 N·m effort limit).
+
+    At spawn, joints sit at 0 rad; idle stance targets are ±1.22 rad. KP=30 produces
+    30 N·m — safely below the 100 N·m limit. KP=100 produced 100 N·m and caused PD
+    oscillation that launched the robot.
+    """
+    from HeartBeat import WBC_KP, WBC_KD
+    error_rad = 1.0   # representative spawn-to-stance delta
+    velocity = 0.0    # worst case: no damping contribution
+    effort_limit = 100.0  # N·m, URDF effort limit
+    tau = WBC_KP * error_rad - WBC_KD * velocity
+    assert tau < effort_limit, (
+        f"WBC saturates at 1.0 rad error: τ={tau:.1f} N·m ≥ {effort_limit} N·m. "
+        f"KP={WBC_KP} is too high — reduce it."
+    )
 
 
 def test_tracking_error_populated_after_wbc():

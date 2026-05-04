@@ -23,7 +23,7 @@ import numpy as np
 from typing import IO, Optional
 
 from shared_state import Siclo1State, ERR_TIMING_VIOLATION
-from regime_monitor import RegimeMonitor
+from regime_monitor import RegimeMonitor, PrimaryRegime, Condition
 
 
 # ============================================================================
@@ -31,6 +31,18 @@ from regime_monitor import RegimeMonitor
 # ============================================================================
 
 WARMUP_CYCLES: int = 50  # cycles — excluded from performance statistics
+
+REGIME_CONFIDENCE_SIGNALS: tuple = (
+    'base_z', 'angular_velocity',
+    'contact_force_left', 'contact_force_right',
+    'contact_force_stance', 'contact_force_swing',
+    'wbc_tracking_error', 'ramp_gain',
+)
+
+REGIME_CSV_HEADER: str = (
+    "timestamp_s,cycle,regime,condition,"
+    + ",".join(f"conf_{s}" for s in REGIME_CONFIDENCE_SIGNALS)
+)
 
 # 72-column header matching TelemetryRingBuffer.COLS layout in shared_state.py
 CSV_HEADER: str = (
@@ -93,14 +105,20 @@ class SessionLogger:
         session_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self._session_path: str = os.path.join(base_dir, "sessions", session_name)
         self._csv: Optional[IO[str]] = None
+        self._regime_csv: Optional[IO[str]] = None
 
         try:
             os.makedirs(self._session_path, exist_ok=True)
             csv_path = os.path.join(self._session_path, "telemetry.csv")
             self._csv = open(csv_path, 'w', buffering=8192)
             self._csv.write(CSV_HEADER + '\n')
+
+            regime_path = os.path.join(self._session_path, "regime.csv")
+            self._regime_csv = open(regime_path, 'w', buffering=8192)
+            self._regime_csv.write(REGIME_CSV_HEADER + '\n')
         except OSError:
             self._csv = None
+            self._regime_csv = None
 
     @property
     def session_path(self) -> str:
@@ -111,6 +129,18 @@ class SessionLogger:
         if self._csv is None:
             return
         self._csv.write(','.join(f'{v:.6g}' for v in row) + '\n')
+
+    def append_regime_row(self, ts: float, cycle: int,
+                          regime: PrimaryRegime, condition: Condition,
+                          conf: dict) -> None:
+        """Write one regime classification row. No-op if file unavailable."""
+        if self._regime_csv is None:
+            return
+        fields = [f'{ts:.6g}', str(cycle), regime.name, condition.name]
+        for sig in REGIME_CONFIDENCE_SIGNALS:
+            val = conf.get(sig)
+            fields.append(f'{val:.4f}' if val is not None else '')
+        self._regime_csv.write(','.join(fields) + '\n')
 
     def write_summary(self, stats: dict) -> None:
         """
@@ -177,6 +207,10 @@ class SessionLogger:
                 self._csv.flush()
                 self._csv.close()
                 self._csv = None
+            if self._regime_csv is not None:
+                self._regime_csv.flush()
+                self._regime_csv.close()
+                self._regime_csv = None
             if summary_file is not None:
                 summary_file.close()
 
@@ -258,7 +292,9 @@ class TelemetryThread(threading.Thread):
             self._total_cycles += 1
 
             # Regime classification (10 Hz observer)
-            regime, condition, _conf = self._regime_monitor.classify(row)
+            regime, condition, conf = self._regime_monitor.classify(row)
+            self._session.append_regime_row(
+                row[0], int(row[1]), regime, condition, conf)
 
             # Unpack key columns (72-col layout, see shared_state.py)
             ts       = row[0]   # timestamp_s

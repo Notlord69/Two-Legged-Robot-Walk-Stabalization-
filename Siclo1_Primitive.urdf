@@ -1,0 +1,484 @@
+<?xml version="1.0" ?>
+<!-- =================================================================================== -->
+<!-- |    Siclo1_Primitive.urdf — clone of Siclo1.urdf with corrected inertials        | -->
+<!-- |    Leg visual/collision uses cylinder primitives; inertia updated to match.      | -->
+<!-- |    Root cause fix (2026-05-04): stale Fusion360 mesh COM positions replaced      | -->
+<!-- |    with exact cylinder values (COM on axis, tensors from parallel-axis theorem). | -->
+<!-- =================================================================================== -->
+<robot name="Siclo1">
+  <material name="silver">
+    <color rgba="0.700 0.700 0.700 1.000"/>
+  </material>
+  <transmission name="Left_Hip_Twist_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Left_Hip_Twist">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Left_Hip_Twist_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Left_Hip_Inwards_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Left_Hip_Inwards">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Left_Hip_Inwards_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Left_Hip_Forwards_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Left_Hip_Forwards">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Left_Hip_Forwards_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Left_Knee_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Left_Knee">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Left_Knee_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Left_Ankle_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Left_Ankle">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Left_Ankle_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Right_Hip_Twist_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Right_Hip_Twist">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Right_Hip_Twist_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Right_Hip_Inwards_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Right_Hip_Inwards">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Right_Hip_Inwards_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Right_Hip_Fowards_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Right_Hip_Fowards">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Right_Hip_Fowards_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Right_Knee_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Right_Knee">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Right_Knee_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="Right_Ankle_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="Right_Ankle">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="Right_Ankle_actr">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <gazebo>
+    <plugin filename="libgazebo_ros_control.so" name="control"/>
+  </gazebo>
+  <gazebo reference="base_link">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+    <gravity>true</gravity>
+  </gazebo>
+  <gazebo reference="Yaw_Link_Left_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Inwards_Link_Left_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Left_Upper_Leg_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Left_Lower_Leg_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Left_Foot_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Yaw_Link_Right_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Inwards_Link_Right_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Right_Upper_Leg_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Right_Lower_Leg_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <gazebo reference="Right_Foot_1">
+    <material>Gazebo/Silver</material>
+    <mu1>0.2</mu1>
+    <mu2>0.2</mu2>
+    <selfCollide>true</selfCollide>
+  </gazebo>
+  <link name="base_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.55 0.1839337697675572 0.8806370422241733"/>
+      <mass value="5.999270106348153"/>
+      <inertia ixx="0.628826" ixy="0.000141" ixz="6.4e-05" iyy="0.37776" iyz="0.00285" izz="0.96037"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Yaw_Link_Left_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="1.1102230246251565e-16 -5.551115123125783e-17 -0.08124999999999993"/>
+      <mass value="0.05001800809403412"/>
+      <inertia ixx="5.7e-05" ixy="0.0" ixz="0.0" iyy="5.7e-05" iyz="-0.0" izz="8e-06"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="-0.925 -0.2 -0.98"/>
+      <geometry>
+        <mesh filename="meshes/Yaw_Link_Left_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="-0.925 -0.2 -0.98"/>
+      <geometry>
+        <mesh filename="meshes/Yaw_Link_Left_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Inwards_Link_Left_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.0 0.017796999999999924 0.0"/>
+      <mass value="0.05001800809403413"/>
+      <inertia ixx="8e-06" ixy="-0.0" ixz="0.0" iyy="5.7e-05" iyz="-0.0" izz="5.7e-05"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="-0.925 -0.182203 -0.89875"/>
+      <geometry>
+        <mesh filename="meshes/Inwards_Link_Left_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="-0.925 -0.182203 -0.89875"/>
+      <geometry>
+        <mesh filename="meshes/Inwards_Link_Left_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- LEFT THIGH — cylinder primitive.
+       Inertia corrected for solid cylinder: COM on axis at half-length,
+       Ixx=Iyy=m(3r²+h²)/12, Izz=mr²/2. Replaces stale Fusion360 mesh values. -->
+  <link name="Left_Upper_Leg_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 -0.195"/>
+      <mass value="0.5498281512292873"/>
+      <inertia ixx="0.007055" ixy="0.0" ixz="0.0" iyy="0.007055" iyz="0.0" izz="0.000172"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 -0.195"/>
+      <geometry>
+        <cylinder length="0.390" radius="0.025"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 -0.195"/>
+      <geometry>
+        <cylinder length="0.390" radius="0.025"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- LEFT SHANK — cylinder primitive.
+       Old mesh COM was z=-0.415m, OUTSIDE the 0.360m link (→ phantom lever arm at contact).
+       Fixed: COM at z=-0.180m (cylinder centre), Ixx/Iyy/Izz from cylinder formulas. -->
+  <link name="Left_Lower_Leg_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 -0.180"/>
+      <mass value="0.25056451084866793"/>
+      <inertia ixx="0.002731" ixy="0.0" ixz="0.0" iyy="0.002731" iyz="0.0" izz="0.000050"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 -0.180"/>
+      <geometry>
+        <cylinder length="0.360" radius="0.020"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 -0.180"/>
+      <geometry>
+        <cylinder length="0.360" radius="0.020"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_Foot_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-1.1102230246251565e-16 0.0004028172209023795 -0.07499853795249971"/>
+      <mass value="0.15"/>
+      <inertia ixx="0.002281" ixy="0.0" ixz="0.0" iyy="0.000781" iyz="-9e-06" izz="0.0025"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="-0.99975 -0.225012 -0.148352"/>
+      <geometry>
+        <mesh filename="meshes/Left_Foot_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="-0.99975 -0.225012 -0.148352"/>
+      <geometry>
+        <mesh filename="meshes/Left_Foot_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Yaw_Link_Right_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.0 2.7755575615628914e-17 0.0837500000000001"/>
+      <mass value="0.05001800809403413"/>
+      <inertia ixx="5.7e-05" ixy="-0.0" ixz="0.0" iyy="5.7e-05" iyz="0.0" izz="8e-06"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="-0.175 -0.2 -0.82"/>
+      <geometry>
+        <mesh filename="meshes/Yaw_Link_Right_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="-0.175 -0.2 -0.82"/>
+      <geometry>
+        <mesh filename="meshes/Yaw_Link_Right_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Inwards_Link_Right_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="2.498001805406602e-16 -0.018391706160032883 0.003749999999999032"/>
+      <mass value="0.05001800809403407"/>
+      <inertia ixx="8e-06" ixy="-0.0" ixz="-0.0" iyy="5.7e-05" iyz="0.0" izz="5.7e-05"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="-0.175 -0.217797 -0.9"/>
+      <geometry>
+        <mesh filename="meshes/Inwards_Link_Right_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="-0.175 -0.217797 -0.9"/>
+      <geometry>
+        <mesh filename="meshes/Inwards_Link_Right_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- RIGHT THIGH — cylinder primitive.
+       Old mesh COM had x=-0.141m off-axis (14cm lateral shift on a 2.5cm-radius cylinder).
+       Fixed: COM on symmetry axis at half-length. Inertia from cylinder formulas. -->
+  <link name="Right_Upper_Leg_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 -0.195"/>
+      <mass value="0.5498281512292872"/>
+      <inertia ixx="0.007055" ixy="0.0" ixz="0.0" iyy="0.007055" iyz="0.0" izz="0.000172"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 -0.195"/>
+      <geometry>
+        <cylinder length="0.390" radius="0.025"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 -0.195"/>
+      <geometry>
+        <cylinder length="0.390" radius="0.025"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- RIGHT SHANK — cylinder primitive.
+       Old mesh COM was z=-0.495m, OUTSIDE the 0.360m link by 135mm (worst offender).
+       Fixed: COM at z=-0.180m (cylinder centre). -->
+  <link name="Right_Lower_Leg_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 -0.180"/>
+      <mass value="0.2505645108486679"/>
+      <inertia ixx="0.002731" ixy="0.0" ixz="0.0" iyy="0.002731" iyz="0.0" izz="0.000050"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 -0.180"/>
+      <geometry>
+        <cylinder length="0.360" radius="0.020"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 -0.180"/>
+      <geometry>
+        <cylinder length="0.360" radius="0.020"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Right_Foot_1">
+    <inertial>
+      <origin rpy="0 0 0" xyz="6.938893903907228e-17 -0.00040191489700858174 -0.07499884864350675"/>
+      <mass value="0.15000000000000002"/>
+      <inertia ixx="0.002281" ixy="0.0" ixz="0.0" iyy="0.000781" iyz="9e-06" izz="0.0025"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="-0.10025 -0.196441 -0.150465"/>
+      <geometry>
+        <mesh filename="meshes/Right_Foot_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="-0.10025 -0.196441 -0.150465"/>
+      <geometry>
+        <mesh filename="meshes/Right_Foot_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="Left_Hip_Twist" type="revolute">
+    <origin rpy="0 0 0" xyz="0.925 0.2 1.018094"/>
+    <parent link="base_link"/>
+    <child link="Yaw_Link_Left_1"/>
+    <axis xyz="0.0 0.0 1.0"/>
+    <limit effort="100" lower="-0.349066" upper="0.349066" velocity="100"/>
+  </joint>
+  <joint name="Left_Hip_Inwards" type="revolute">
+    <origin rpy="0 0 0" xyz="0.0 -0.017797 -0.08125"/>
+    <parent link="Yaw_Link_Left_1"/>
+    <child link="Inwards_Link_Left_1"/>
+    <axis xyz="-0.0 -1.0 0.0"/>
+    <limit effort="100" lower="-0.698132" upper="0.698132" velocity="100"/>
+  </joint>
+  <joint name="Left_Hip_Forwards" type="revolute">
+    <origin rpy="0 0 0" xyz="-0.05625 0.017797 -0.019047"/>
+    <parent link="Inwards_Link_Left_1"/>
+    <child link="Left_Upper_Leg_1"/>
+    <axis xyz="-1.0 -0.0 -0.0"/>
+    <limit effort="100" lower="-1.570796" upper="1.570796" velocity="100"/>
+  </joint>
+  <joint name="Left_Knee" type="revolute">
+    <origin rpy="0 0 0" xyz="0.0 0.0 -0.390000"/>
+    <parent link="Left_Upper_Leg_1"/>
+    <child link="Left_Lower_Leg_1"/>
+    <axis xyz="-1.0 0.0 -0.0"/>
+    <limit effort="100" lower="-1.570796" upper="1.570796" velocity="100"/>
+  </joint>
+  <joint name="Left_Ankle" type="revolute">
+    <origin rpy="0 0 0" xyz="0.0 0.0 -0.360000"/>
+    <parent link="Left_Lower_Leg_1"/>
+    <child link="Left_Foot_1"/>
+    <axis xyz="0.0 0.005365 -0.999986"/>
+    <limit effort="100" lower="-0.349066" upper="0.349066" velocity="100"/>
+  </joint>
+  <joint name="Right_Hip_Twist" type="revolute">
+    <origin rpy="0 0 0" xyz="0.175 0.2 0.82"/>
+    <parent link="base_link"/>
+    <child link="Yaw_Link_Right_1"/>
+    <axis xyz="0.0 -0.0 -1.0"/>
+    <limit effort="100" lower="-0.349066" upper="0.349066" velocity="100"/>
+  </joint>
+  <joint name="Right_Hip_Inwards" type="revolute">
+    <origin rpy="0 0 0" xyz="0.0 0.017797 0.08"/>
+    <parent link="Yaw_Link_Right_1"/>
+    <child link="Inwards_Link_Right_1"/>
+    <axis xyz="0.0 -1.0 0.0"/>
+    <limit effort="100" lower="-0.698132" upper="0.698132" velocity="100"/>
+  </joint>
+  <joint name="Right_Hip_Fowards" type="revolute">
+    <origin rpy="0 0 0" xyz="0.05625 -0.017797 0.017797"/>
+    <parent link="Inwards_Link_Right_1"/>
+    <child link="Right_Upper_Leg_1"/>
+    <axis xyz="1.0 0.0 0.0"/>
+    <limit effort="100" lower="-1.570796" upper="1.570796" velocity="100"/>
+  </joint>
+  <joint name="Right_Knee" type="revolute">
+    <origin rpy="0 0 0" xyz="0.0 0.0 -0.390000"/>
+    <parent link="Right_Upper_Leg_1"/>
+    <child link="Right_Lower_Leg_1"/>
+    <axis xyz="1.0 0.0 0.0"/>
+    <limit effort="100" lower="-1.570796" upper="1.570796" velocity="100"/>
+  </joint>
+  <joint name="Right_Ankle" type="revolute">
+    <origin rpy="0 0 0" xyz="0.0 0.0 -0.360000"/>
+    <parent link="Right_Lower_Leg_1"/>
+    <child link="Right_Foot_1"/>
+    <axis xyz="0.0 -0.005365 -0.999986"/>
+    <limit effort="100" lower="-0.349066" upper="0.349066" velocity="100"/>
+  </joint>
+</robot>

@@ -658,9 +658,9 @@ class Siclo1Controller:
 
         # 6. URDF — direct path, no glob
         current_folder = os.path.dirname(os.path.abspath(__file__))
-        urdf_file = os.path.join(current_folder, "Siclo1.urdf")
+        urdf_file = os.path.join(current_folder, "Siclo1_Primitive.urdf")
         if not os.path.isfile(urdf_file):
-            print(f"[CRITICAL] Siclo1.urdf not found in {current_folder}")
+            print(f"[CRITICAL] Siclo1_Primitive.urdf not found in {current_folder}")
             sys.exit(1)
         print(f"[Siclo1] URDF path: {os.path.abspath(urdf_file)}")
 
