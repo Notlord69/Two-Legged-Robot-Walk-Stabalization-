@@ -9,8 +9,8 @@ import xml.etree.ElementTree as ET
 import pytest
 
 URDF_PATH = "/home/notlord/ros2_ws/Siclo1_V1/Siclo1.urdf"
-L_THIGH_CANONICAL = 0.060661  # m, Left leg reference
-L_SHANK_CANONICAL = 0.686961  # m, Left leg reference
+L_THIGH_CANONICAL = 0.390000  # m, Left leg reference (ITER-003 2026-05-04)
+L_SHANK_CANONICAL = 0.360000  # m, Left leg reference (ITER-004 2026-05-04)
 TOL = 1e-4                    # m, acceptable symmetry tolerance
 
 
@@ -138,7 +138,7 @@ class TestSolveIK:
         assert limits[ankle_name]["lower"] <= ankle <= limits[ankle_name]["upper"], f"ankle {ankle:.4f} out of range"
 
     def test_foot_directly_below_hip_left(self):
-        # z=-0.72 gives d=0.72 > sqrt(L_THIGH²+L_SHANK²)=0.6897 — knee within ±π/2
+        # z=-0.72 gives d=0.72 in [R_MIN, R_MAX] and > sqrt(L_THIGH²+L_SHANK²)=0.5307 — knee within ±π/2
         from kinematics import solve_ik
         hip, knee, ankle = solve_ik((0.0, 0.0, -0.72), "left")
         self._assert_within_urdf_limits(hip, knee, ankle, "left")

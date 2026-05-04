@@ -9,19 +9,17 @@ Axis-sign convention (URDF):
 Ankle axis ≈ -Z (yaw, not sagittal pitch) → always 0.0 from IK.
 
 Geometric note on proportions:
-  L_THIGH (60mm) << L_SHANK (687mm). For any foot position in the reachable
-  annulus, the hip angle will be large (~60-90 deg) because the tiny thigh must
-  swing nearly horizontal to position the knee above the foot.
-  Knee stays within +/-pi/2 only when d >= sqrt(L_THIGH^2+L_SHANK^2) ~= 0.6897 m.
+  L_THIGH = 390mm, L_SHANK = 360mm (1.083:1, ITER-003/004 2026-05-04).
+  Knee stays within +/-pi/2 when d >= sqrt(L_THIGH^2+L_SHANK^2) ~= 0.5307 m.
 """
 import math
 
-# -- Canonical segment lengths (Left leg, ITER-001/002 patched 2026-04-04) ----
-L_THIGH            = 0.060661  # m, hip-pitch axis to knee pivot
-L_SHANK            = 0.686961  # m, knee pivot to ankle pivot
+# -- Canonical segment lengths (Left leg, ITER-003/004 patched 2026-05-04) ----
+L_THIGH            = 0.390000  # m, hip-pitch axis to knee pivot
+L_SHANK            = 0.360000  # m, knee pivot to ankle pivot
 SINGULARITY_BUFFER = 0.005     # m, workspace annulus margin (avoid lock/collapse)
-R_MIN = abs(L_THIGH - L_SHANK) + SINGULARITY_BUFFER  # m, 0.631300 inner bound
-R_MAX = L_THIGH + L_SHANK - SINGULARITY_BUFFER        # m, 0.742622 outer bound
+R_MIN = abs(L_THIGH - L_SHANK) + SINGULARITY_BUFFER  # m, 0.035000 inner bound
+R_MAX = L_THIGH + L_SHANK - SINGULARITY_BUFFER        # m, 0.745000 outer bound
 
 SWING_HEIGHT = 0.04  # m, default foot clearance above ground during swing
 
@@ -57,7 +55,7 @@ def solve_ik(foot_xyz: tuple, side: str) -> tuple:
       knee       positive = flexion             (Left negated, Right kept)
       ankle      0.0 (URDF axis ~= -Z = yaw, not sagittal pitch)
 
-    Knee stays within +/-pi/2 when foot distance d >= sqrt(L_THIGH^2+L_SHANK^2) ~= 0.6897 m.
+    Knee stays within +/-pi/2 when foot distance d >= sqrt(L_THIGH^2+L_SHANK^2) ~= 0.5307 m.
 
     Raises ValueError if side is not 'left' or 'right'.
     """

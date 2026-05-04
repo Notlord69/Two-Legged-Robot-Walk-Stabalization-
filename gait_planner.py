@@ -83,16 +83,20 @@ _LEFT_HIP_LINK:  str = "Left_Upper_Leg_1"
 _RIGHT_HIP_LINK: str = "Right_Upper_Leg_1"
 
 # Idle stance: 95% of maximum leg reach (R_MAX = L_THIGH + L_SHANK - buffer).
-# 80% is unreachable (falls below R_MIN) due to extreme L_THIGH/L_SHANK ratio.
-# 95% gives hip=-1.22 rad, knee=1.30 rad — within ±1.571 URDF limits.
+# 95% of R_MAX (0.745m) = 0.7078m reach → hip≈0.3253 rad, knee≈0.6711 rad (ITER-003/004).
 IDLE_STANCE_RATIO: float = 0.95  # dimensionless, fraction of kinematics.R_MAX
 _IDLE_STANCE_D: float = IDLE_STANCE_RATIO * kinematics.R_MAX  # m, target hip-to-foot distance
 
 # Fallback joint angles if IK fails (pre-computed from 95% R_MAX, foot below hip).
 # Left: URDF axis = -X → geometric angles negated.
 # Right: URDF axis = +X → geometric angles kept.
-_IDLE_FALLBACK_LEFT:  tuple = (0.0, 1.2191, -1.3021, 0.0)   # (roll, hip_pitch, knee, ankle)
-_IDLE_FALLBACK_RIGHT: tuple = (0.0, -1.2191, 1.3021, 0.0)   # (roll, hip_pitch, knee, ankle)
+_IDLE_FALLBACK_LEFT:  tuple = (0.0, 0.3253, -0.6711, 0.0)   # (roll, hip_pitch, knee, ankle)
+_IDLE_FALLBACK_RIGHT: tuple = (0.0, -0.3253, 0.6711, 0.0)   # (roll, hip_pitch, knee, ankle)
+
+STANCE_RAMP_CYCLES: int = 50  # cycles (0.5s at 100 Hz), linear ramp from spawn pose to stance
+
+_LEFT_JOINT_NAMES:  tuple = ('Left_Hip_Inwards', 'Left_Hip_Forwards', 'Left_Knee', 'Left_Ankle')
+_RIGHT_JOINT_NAMES: tuple = ('Right_Hip_Inwards', 'Right_Hip_Fowards', 'Right_Knee', 'Right_Ankle')
 
 
 # ============================================================================
@@ -148,6 +152,9 @@ class GaitPlannerController:
         self._ds_lock_pending: bool = True  # lock stance foot on first DS cycle
         self._locked_stance_ik: tuple = (0.0, 0.0, 0.0)  # (hip_pitch, knee, ankle) at COM_SHIFT entry
         self._com_shift_ik_locked: bool = False
+        self._ramp_cycle: int = 0
+        self._ramp_start_left:  tuple = None  # snapshotted on first idle call
+        self._ramp_start_right: tuple = None
 
     # ── Public entry point ────────────────────────────────────────────────────
 
@@ -203,23 +210,36 @@ class GaitPlannerController:
         self._transition_to(StepPhase.DOUBLE_SUPPORT)
 
     def _handle_idle_stance(self) -> None:
-        """Compute standing IK for both legs — feet directly below hips.
+        """Ramp IK targets from current joint positions to standing pose.
 
-        Uses IK-derived angles at 95% of max leg reach. Falls back to
-        pre-computed angles if IK fails.
+        Over STANCE_RAMP_CYCLES, linearly interpolates from the joint angles
+        at the first call to the IK-derived stance angles. Prevents the WBC
+        from saturating all joints at 100 N·m on a cold start.
         """
+        jp = shared_state.joint_positions
+
+        if self._ramp_start_left is None:
+            self._ramp_start_left = tuple(jp.get(n, 0.0) for n in _LEFT_JOINT_NAMES)
+            self._ramp_start_right = tuple(jp.get(n, 0.0) for n in _RIGHT_JOINT_NAMES)
+
+        self._ramp_cycle += 1
+        alpha = min(1.0, self._ramp_cycle / STANCE_RAMP_CYCLES)
+
         for side in ("left", "right"):
             try:
                 foot_target = (0.0, 0.0, -_IDLE_STANCE_D)
                 ik_angles = kinematics.solve_ik(foot_target, side)
-                angles = (0.0, ik_angles[0], ik_angles[1], ik_angles[2])
+                target = (0.0, ik_angles[0], ik_angles[1], ik_angles[2])
             except ValueError:
-                angles = _IDLE_FALLBACK_LEFT if side == "left" else _IDLE_FALLBACK_RIGHT
+                target = _IDLE_FALLBACK_LEFT if side == "left" else _IDLE_FALLBACK_RIGHT
+
+            start = self._ramp_start_left if side == "left" else self._ramp_start_right
+            ramped = tuple((1.0 - alpha) * s + alpha * t for s, t in zip(start, target))
 
             if side == "left":
-                shared_state.ik_left_angles = angles
+                shared_state.ik_left_angles = ramped
             else:
-                shared_state.ik_right_angles = angles
+                shared_state.ik_right_angles = ramped
 
     # ── Stance IK anchor (used every cycle for stance leg) ───────────────────
 
@@ -560,12 +580,27 @@ def update_gait_planner() -> None:
     _gait_planner.update()
 
 
+def get_idle_stance_angles() -> dict:
+    """Return {joint_name: angle_rad} for all 8 controlled joints at idle stance.
+
+    Uses the fallback values (pre-computed from 95% R_MAX IK). Called by HeartBeat
+    to pre-position joints via resetJointState before warmup, so the ramp starts
+    from a stable state rather than chaotic post-gravity positions.
+    """
+    return dict(zip(_LEFT_JOINT_NAMES, _IDLE_FALLBACK_LEFT)) | \
+           dict(zip(_RIGHT_JOINT_NAMES, _IDLE_FALLBACK_RIGHT))
+
+
 def reset_gait_planner() -> None:
     """Reset gait planner state after warmup.
 
     Called by HeartBeat after warmup to ensure stance foot is locked fresh
     using the stabilized foot position, not the bouncing warmup position.
+    Ramp state is also reset — the next idle call re-snapshots joint positions.
     """
     _gait_planner._ds_lock_pending = True
     _gait_planner._com_shift_ik_locked = False
+    _gait_planner._ramp_cycle = 0
+    _gait_planner._ramp_start_left = None
+    _gait_planner._ramp_start_right = None
     shared_state.stance_foot_world_pos = np.zeros(3)

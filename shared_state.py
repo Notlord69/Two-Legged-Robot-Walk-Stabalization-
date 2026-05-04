@@ -789,12 +789,11 @@ URDF_JOINT_LIMITS: Dict[str, Dict[str, float]] = {
 # a knee and ankle.  Lengths below are the Euclidean joint-to-joint distances
 # in the full kinematic chain at neutral pose (all angles = 0):
 #
-#   Both legs (symmetric after URDF fix 2026-04-28):
-#     thigh : |Knee origin Z| from Hip_Forwards frame = 0.060661 m
-#     shank : |Ankle origin Z| from Knee frame        = 0.686961 m
+#   Both legs (symmetric, ITER-003/004 2026-05-04):
+#     thigh : |Knee origin Z| from Hip_Forwards frame = 0.390000 m
+#     shank : |Ankle origin Z| from Knee frame        = 0.360000 m  (ratio 1.083:1)
 #
-# The URDF encodes the leg as a laterally offset, nearly-vertical chain
-# with most of the leg length in the shank segment.
+# The URDF encodes the leg as a laterally offset, nearly-vertical chain.
 # The 2D FK in stability.py uses these as the sagittal-plane rod lengths.
 #
 # MASSES: directly from each <link><inertial><mass value="..."/> tag.
@@ -813,13 +812,13 @@ DEFAULT_LINK_DATA: Dict[str, Dict] = {
     # ── Left leg ─────────────────────────────────────────────────────────────
     'l_thigh': {
         'mass':      0.549828,    # Left_Upper_Leg_1 mass (kg)
-        'length':    0.060661,    # Left_Hip_Forwards → Left_Knee  (m)
-        'com_local': 0.577,       # |com_z / length| = 0.03499 / 0.0607 ≈ 0.577
+        'length':    0.390000,    # Left_Hip_Forwards → Left_Knee  (m)  ITER-003
+        'com_local': 0.090,       # |com_z / length| = 0.03499 / 0.390 ≈ 0.090
     },
     'l_shank': {
         'mass':      0.250565,    # Left_Lower_Leg_1 mass (kg)
-        'length':    0.686961,    # Left_Knee → Left_Ankle  (m)
-        'com_local': 0.604,       # |com_z / length| = 0.4154 / 0.6870 ≈ 0.604
+        'length':    0.360000,    # Left_Knee → Left_Ankle  (m)  ITER-004
+        'com_local': 0.500,       # midpoint — old inertial COM (0.415m) exceeds new segment length
     },
     'l_foot': {
         'mass':      0.150000,    # Left_Foot_1 mass (kg)
@@ -830,13 +829,13 @@ DEFAULT_LINK_DATA: Dict[str, Dict] = {
     # ── Right leg (symmetric with left after URDF fix 2026-04-28) ───────────
     'r_thigh': {
         'mass':      0.549828,    # Right_Upper_Leg_1 mass (kg)
-        'length':    0.060661,    # Right_Hip_Fowards → Right_Knee  (m)
-        'com_local': 0.577,       # symmetric with l_thigh after joint origin fix
+        'length':    0.390000,    # Right_Hip_Fowards → Right_Knee  (m)  ITER-003
+        'com_local': 0.090,       # symmetric with l_thigh
     },
     'r_shank': {
         'mass':      0.250565,    # Right_Lower_Leg_1 mass (kg)
-        'length':    0.686961,    # Right_Knee → Right_Ankle  (m)
-        'com_local': 0.604,       # symmetric with l_shank after joint origin fix
+        'length':    0.360000,    # Right_Knee → Right_Ankle  (m)  ITER-004
+        'com_local': 0.500,       # symmetric with l_shank — midpoint assumption
     },
     'r_foot': {
         'mass':      0.150000,    # Right_Foot_1 mass (kg)

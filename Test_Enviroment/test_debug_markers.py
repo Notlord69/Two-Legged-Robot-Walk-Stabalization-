@@ -37,7 +37,7 @@ def test_arc_endpoints_are_at_hip_height():
 def test_arc_all_points_at_correct_radius():
     from viz.debug_markers import _arc_points
     hip = (1.0, 2.0, 3.0)
-    r = 0.6313
+    r = 0.035
     pts = _arc_points(hip, r, 18)
     for pt in pts:
         dx = pt[0] - hip[0]
