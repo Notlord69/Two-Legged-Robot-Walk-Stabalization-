@@ -24,22 +24,70 @@ All Right-leg joint origins, limits, and inertial properties must be brought int
 
 ## Canonical Segment Lengths (Reference — Left Leg)
 
-Derived from URDF `<origin>` Euclidean norm. Verified 2026-04-04.
+Derived from URDF `<origin>` Euclidean norm. Updated 2026-05-04 (ITER-003/004).
 
-| Segment      | Joint                | xyz (in parent frame)       | ‖xyz‖ (m)  |
+| Segment      | Joint                | xyz (in parent frame)  | ‖xyz‖ (m)  |
 |---|---|---|---|
-| Thigh        | Left_Knee            | 0.031, 0.000969, -0.052133  | 0.060661   |
-| Shank        | Left_Ankle           | 0.1, 0.024043, -0.679218    | 0.686961   |
+| Thigh        | Left_Knee            | 0.0, 0.0, -0.390000    | 0.390000   |
+| Shank        | Left_Ankle           | 0.0, 0.0, -0.360000    | 0.360000   |
 
 Derived IK constants:
-- `R_min = |L_thigh − L_shank| + 0.005 = 0.631300 m`
-- `R_max = L_thigh + L_shank − 0.005 = 0.742622 m`
+- `R_min = |L_thigh − L_shank| + 0.005 = 0.035000 m`
+- `R_max = L_thigh + L_shank − 0.005 = 0.745000 m`
+- Ratio: 1.083:1 (thigh-dominant)
+- Total leg span: 0.750 m (75 cm)
 
 ---
 
 ## Pending Changes
 
 _(none)_
+
+---
+
+### [ITER-003] Left_Knee + Right_Knee — origin xyz (thigh length)
+| Field | Original Value | Updated Value | Unit |
+|---|---|---|---|
+| xyz (both knees) | `0.0  0.0  -0.060661` | `0.0  0.0  -0.390000` | m |
+
+**Technical Justification:** Previous thigh length of 0.060661 m (6.07 cm) was a Fusion 360 export artifact yielding a 1:11.3 thigh-to-shank ratio. Corrected to 0.390 m (39 cm) for a biomechanically valid 1.083:1 ratio optimised for walking, running, and stair climbing. Total leg length: 75 cm. Hip flexion for 18 cm stair step = 28° (vs 31° at equal segments). Design spec: `docs/superpowers/specs/2026-05-04-leg-geometry-redesign.md`.  
+**Timestamp:** 2026-05-04 | Iteration: 003  
+**Status:** APPLIED — 2026-05-04
+
+---
+
+### [ITER-004] Left_Ankle + Right_Ankle — origin xyz (shank length)
+| Field | Original Value | Updated Value | Unit |
+|---|---|---|---|
+| xyz (both ankles) | `0.0  0.0  -0.686961` | `0.0  0.0  -0.360000` | m |
+
+**Technical Justification:** Previous shank length of 0.686961 m (68.70 cm) was the counterpart to the disproportionate thigh. Corrected to 0.360 m (36 cm). Shorter distal segment reduces swing-phase rotational inertia for running. R_min = 0.035 m, R_max = 0.745 m. Design spec: `docs/superpowers/specs/2026-05-04-leg-geometry-redesign.md`.  
+**Timestamp:** 2026-05-04 | Iteration: 004  
+**Status:** APPLIED — 2026-05-04
+
+---
+
+### [ITER-005] Left_Upper_Leg_1 + Right_Upper_Leg_1 — visual/collision geometry
+| Field | Original Value | Updated Value | Unit |
+|---|---|---|---|
+| geometry | `mesh Left_Upper_Leg_1.stl scale=0.001` | `cylinder length=0.390 radius=0.025` | m |
+| visual origin xyz | `-0.86875 -0.2 -0.879703` / `-0.23125 -0.2 -0.917797` | `0 0 -0.195` | m |
+
+**Technical Justification:** STL mesh Z-span was 29 cm at scale 0.001 — already mismatched to the 6 cm kinematic chain and now mismatched to the 39 cm chain. Replaced with cylinder primitive centred at Z=-0.195 (midpoint of thigh). Inertial mass and tensor unchanged. Mesh will be restored when Fusion 360 re-exports the updated part.  
+**Timestamp:** 2026-05-04 | Iteration: 005  
+**Status:** APPLIED — 2026-05-04
+
+---
+
+### [ITER-006] Left_Lower_Leg_1 + Right_Lower_Leg_1 — visual/collision geometry
+| Field | Original Value | Updated Value | Unit |
+|---|---|---|---|
+| geometry | `mesh Left_Lower_Leg_1.stl scale=0.001` | `cylinder length=0.360 radius=0.020` | m |
+| visual origin xyz | `-0.89975 -0.200969 -0.82757` / `-0.12525 -0.186308 -0.909207` | `0 0 -0.180` | m |
+
+**Technical Justification:** STL mesh Z-span was 61 cm at scale 0.001 — mismatched to both the old 69 cm and new 36 cm chain. Replaced with cylinder primitive centred at Z=-0.180 (midpoint of shank). Radius 20 mm (slightly thinner than thigh). Inertial mass and tensor unchanged.  
+**Timestamp:** 2026-05-04 | Iteration: 006  
+**Status:** APPLIED — 2026-05-04
 
 ---
 

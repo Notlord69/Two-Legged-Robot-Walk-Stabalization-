@@ -105,6 +105,23 @@ A copy of the modified `Siclo1.urdf` is placed in `urdf_change/` alongside the l
 
 ---
 
+## Visual and Collision Geometry
+
+The four affected leg links replace their STL mesh references with URDF cylinder primitives. The existing STL meshes are 29 cm (thigh) and 61 cm (shank) at scale 0.001 — neither matches the new kinematic chain, so they were already visually wrong. Cylinders give correct proportions immediately and are the standard simulation placeholder until Fusion 360 delivers regenerated STLs.
+
+| Link | Geometry | Radius | Length | Visual origin xyz |
+|------|----------|--------|--------|-------------------|
+| `Left_Upper_Leg_1` | cylinder | 0.025 m | 0.390 m | `0 0 -0.195` |
+| `Right_Upper_Leg_1` | cylinder | 0.025 m | 0.390 m | `0 0 -0.195` |
+| `Left_Lower_Leg_1` | cylinder | 0.020 m | 0.360 m | `0 0 -0.180` |
+| `Right_Lower_Leg_1` | cylinder | 0.020 m | 0.360 m | `0 0 -0.180` |
+
+Visual origin centres the cylinder between its two bounding joints. `rpy="0 0 0"` — cylinder axis aligns with the link's Z-axis which is the kinematic down-chain direction.
+
+Base, foot, yaw, and inwards links retain their original STL meshes. Inertia tensors are not changed (they reflect physical hardware mass distribution, not visual shape).
+
+When Fusion 360 STLs are ready, each affected link needs only its `<visual>` and `<collision>` blocks swapped back — joint origins and inertial tags remain untouched.
+
 ## Out of Scope
 
 - Mesh regeneration (Fusion 360 work, separate task)
